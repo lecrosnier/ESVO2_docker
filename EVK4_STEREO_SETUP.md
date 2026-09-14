@@ -8,8 +8,10 @@ DVXplorer rig.
 **Current status:** the full pipeline launches and runs (cameras, IMU,
 time surfaces, mapping, tracking, visualization), and the crashes and
 memory leaks found so far are fixed. Pose estimation does **not** work
-reliably yet: mapping rarely completes its stereo (SGM) initialization, and
-IMU fusion is disabled because it diverged. See "Known limitations".
+reliably yet: stereo (SGM) initialization does succeed, but the local map
+then collapses below the 300 points tracking needs, so the system keeps
+resetting. IMU fusion is disabled because it diverged. See "Known
+limitations".
 
 ## Hardware
 

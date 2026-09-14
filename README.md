@@ -2,6 +2,30 @@
 
 This repository delivers **ESVO2**, an event-based stereo visual-inertial odometry system built on top of our previous work ESVO [3]. It is a direct method that solves the tracking and mapping problems in parallel by leveraging the spatio-temporal coherence in the stereo event data. It alleviates ESVO's high computational complexity in mapping and address its degeneracy in camera pose tracking. To the best of our knowledge, the system is the first published work that achieves real-time performance using a standard CPU on event cameras of VGA pixel resolution. 
 
+## About this fork: live stereo Prophesee EVK4 + SBG IMU
+
+This fork runs ESVO2 live on a hardware-synced stereo pair of **Prophesee EVK4** (IMX636, 1280x720) event cameras with an **SBG** IMU, on ROS Noetic. The full details are in **[EVK4_STEREO_SETUP.md](EVK4_STEREO_SETUP.md)**: calibration, every change made, pitfalls found along the way, and known limitations.
+
+**Status:** the whole pipeline runs, and the crashes and memory leak found so far are fixed. Pose estimation is **not reliable yet**. Stereo initialization succeeds, but the local map then shrinks below the 300 points tracking needs, so the system keeps resetting. IMU fusion is disabled (`USE_IMU: False`) because it diverged, and the IMU-to-camera extrinsics (`T_b_c`) are still uncalibrated.
+
+**Main additions:**
+- `esvo2_core/calib/evk4_stereo/`: stereo calibration for the EVK4 rig.
+- `esvo2_core/cfg/{mapping,tracking}/*evk4*.yaml` and `esvo2_core/launch/system/system_evk4_mapping.launch`: configuration and launch file for the rig.
+- `image_representation`: fix for an unbounded event queue (a leak that grew to 11 GB) and a crash in `AA_thread`.
+- `esvo2_core/src/core/BackendOptimization.cpp`: guards against crashes in the IMU back end.
+- `evk4_drivers/`: a patch that adds a stereo publisher to [prophesee_ros_wrapper](https://github.com/prophesee-ai/prophesee_ros_wrapper), plus the config and launch file for [sbg_ros_driver](https://github.com/SBG-Systems/sbg_ros_driver).
+
+**Quick launch** (build and set up the drivers as described in [EVK4_STEREO_SETUP.md](EVK4_STEREO_SETUP.md) first; both cameras must be on real USB3 ports, not a USB-C dock or unpowered hub):
+
+```shell
+source ~/catkin_ws/devel/setup.bash
+roslaunch prophesee_ros_driver stereo.launch        # terminal 1: both EVK4s
+roslaunch sbg_driver sbg_evk4_rig.launch            # terminal 2: SBG IMU
+roslaunch esvo2_core system_evk4_mapping.launch     # terminal 3: ESVO2 + rviz
+```
+
+The rest of this README is the original ESVO2 documentation for the offline datasets.
+
 ### **Video**
 
 [![IMAGE ALT TEXT HERE](cover_of_video.png)](https://youtu.be/gmAU32Oeiv8) &nbsp;&nbsp;
@@ -47,7 +71,7 @@ You should have created a catkin workspace in Section 1.1. If not, please go bac
 
 ```shell
 cd ~/catkin_ws/src 
-git clone https://github.com/NAIL-HNU/ESVO2.git
+git clone https://github.com/lecrosnier/ESVO2_docker.git ESVO2
 ```
 
 Then **clone the required dependency** packages
