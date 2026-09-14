@@ -15,7 +15,10 @@ namespace image_representation
   ImageRepresentation::ImageRepresentation(ros::NodeHandle &nh, ros::NodeHandle nh_private) : nh_(nh)
   {
     // setup subscribers and publishers
-    event_sub_ = nh_.subscribe("events", 0, &ImageRepresentation::eventsCallback, this);
+    // queue_size 0 is unbounded in roscpp; the backlog reached 11GB when generation held data_mutex_ too long.
+    int event_sub_queue_size;
+    nh_private.param<int>("event_sub_queue_size", event_sub_queue_size, 10000);
+    event_sub_ = nh_.subscribe("events", event_sub_queue_size, &ImageRepresentation::eventsCallback, this);
     image_transport::ImageTransport it_(nh_);
     nh_private.param<bool>("is_left", is_left_, true);    // is left camera
     if (is_left_)   
@@ -143,9 +146,10 @@ namespace image_representation
 
     std::fill(beta.begin(), beta.end(), 0);
     std::fill(last_event_time.begin(), last_event_time.end(), 0);
-    for (auto it = ptr_e; it != vEvents_.begin(); it--) // traverse events in reverse to accumulate the latest events
+    // Walk [begin, ptr_e) newest-first. The old loop started at ptr_e itself, which is end() whenever every buffered event predates the sync time.
+    for (std::vector<dvs_msgs::Event>::reverse_iterator rit(ptr_e); rit != vEvents_.rend(); ++rit) // traverse events in reverse to accumulate the latest events
     {
-      dvs_msgs::Event e = *it;
+      dvs_msgs::Event e = *rit;
       int y = e.y / (int)ceil((double)sensor_size_.height / (double)y_patches_);
       int x = e.x / (int)ceil((double)sensor_size_.width / (double)x_patches_);
       if (flag[y * x_patches_ + x] != true)

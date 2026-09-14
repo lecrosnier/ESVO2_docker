@@ -1,0 +1,8 @@
+<launch>
+  <!-- SBG IMU mounted on the EVK4 stereo rig, connected via /dev/ttyUSB0.
+       ros_standard: true is set in the config so this publishes sensor_msgs/Imu
+       on /imu/data, which is exactly what ESVO2 expects (no remap needed). -->
+  <node name="sbg_device" pkg="sbg_driver" type="sbg_device" output="screen">
+    <rosparam command="load" file="$(find sbg_driver)/config/sbg_device_evk4_rig.yaml" />
+  </node>
+</launch>

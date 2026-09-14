@@ -17,11 +17,11 @@
     <remap from="dx_image_pub_" to="dx_image_pub_l" />
     <remap from="dy_image_pub_" to="dy_image_pub_l" />
 
-    <rosparam command="load" file="$(find image_representation)/cfg/image_representation_fast.yaml" />
+    <rosparam command="load" file="$(find image_representation)/cfg/image_representation_fast_r.yaml" />
     <rosparam param="calibInfoDir" subst_value="true">$(arg calibInfoDirStr)</rosparam>
   </node>
-
-  <node name="image_representation_right" pkg="image_representation" type="image_representation" output="screen" >
+ 
+ <node name="image_representation_right" pkg="image_representation" type="image_representation" output="screen" >
     <remap from="events" to="/davis/right/events" />
     <remap from="imu" to="/davis/right/imu" />
     <remap from="image" to="/davis/right/image_raw" />

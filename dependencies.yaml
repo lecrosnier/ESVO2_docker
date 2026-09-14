@@ -31,4 +31,8 @@ repositories:
     type: git
     url: https://github.com/ethz-asl/minkindr_ros.git
     version: master
+  sbg_ros_driver:
+    type: git
+    url: https://github.com/SBG-Systems/sbg_ros_driver.git
+    version: master
 

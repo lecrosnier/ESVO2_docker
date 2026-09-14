@@ -40,6 +40,25 @@ namespace esvo2_core
     void BackendOptimization::sloveProblem()
     {
       TicToc t_optimization;
+
+      // pDepthPoints_ is shared with the mapping thread, which can pop_front()
+      // it concurrently while this function (and Ceres' solve, below) runs.
+      // double2Vector() re-reads its size later; bail out now if there isn't
+      // enough history for a full window, since size() is unsigned and an
+      // undersized deque would underflow the index math into a huge value
+      // (was crashing with SIGSEGV in double2Vector's out-of-bounds access).
+      if ((int)(*pDepthPoints_).size() < WINDOW_SIZE + 1)
+        return;
+
+      // pre_integrations[i] is a raw pointer array, NULL until slideWindow()
+      // has run WINDOW_SIZE times (frame_count counts up to WINDOW_SIZE and
+      // stops). solveGyroscopeBias()/LinearAlignment(), called below via the
+      // IMU-init path, dereference pre_integrations[0..WINDOW_SIZE-1]
+      // unconditionally -- calling in before the window has filled segfaults
+      // on the still-NULL slots.
+      if (bUSE_IMU_ && frame_count < WINDOW_SIZE)
+        return;
+
       // get parameters
       double para_Pose[WINDOW_SIZE + 1][7];
       double para_SpeedBias[WINDOW_SIZE + 1][9];
@@ -224,6 +243,13 @@ if (!(Bgs[WINDOW_SIZE].norm() > 1 || Bas[WINDOW_SIZE].norm() > 1))
 
     void BackendOptimization::double2Vector(double para_Pose[][7], double para_SpeedBias[][9])
     {
+      // Same concurrent-shrink hazard as sloveProblem() above: pDepthPoints_
+      // can have been pop_front()'d by the mapping thread while the Ceres
+      // solve above was running, so re-check size() here too before indexing
+      // with it below.
+      if ((int)(*pDepthPoints_).size() < WINDOW_SIZE + 1)
+        return;
+
       Eigen::Vector3d origin_R0 = Utility::R2ypr(T_wopt_window0_.block<3, 3>(0, 0));
       Eigen::Matrix3d R_wopt_window0 = T_wopt_window0_.block<3, 3>(0, 0);
       Eigen::Vector3d origin_P0 = T_wopt_window0_.block<3, 1>(0, 3);
