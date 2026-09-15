@@ -27,7 +27,11 @@
   </include>
 
   <!-- IMU: publishes sensor_msgs/Imu on /imu/data -->
-  <include if="$(arg imu)" file="$(find sbg_driver)/launch/sbg_evk4_rig.launch" />
+  <group if="$(arg imu)">
+    <include file="$(find sbg_driver)/launch/sbg_evk4_rig.launch" />
+    <!-- Re-stamps /sbg/imu_data with the IMU clock: publishes /imu/data_synced -->
+    <node pkg="esvo2_core" type="imu_restamp.py" name="imu_restamp" output="screen" />
+  </group>
 
   <!-- ESVO2 pipeline -->
   <include file="$(find esvo2_core)/launch/system/system_evk4_mapping.launch">
