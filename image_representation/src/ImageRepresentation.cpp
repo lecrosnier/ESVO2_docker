@@ -111,7 +111,7 @@ namespace image_representation
     }
   }
 
-  void ImageRepresentation::AA_thread(std::vector<dvs_msgs::Event>::iterator &ptr_e, int distance, double external_t)
+  void ImageRepresentation::AA_thread(int distance, double external_t)
   {
     ros::Time external_sync_time(external_t);
 
@@ -129,7 +129,7 @@ namespace image_representation
     // std::vector<int> nums_temp(x_patches_ * y_patches_, 0);
     int nums_EQ = 0;
     // calculate the final activity by all events, also can be estimated by eq. 3 in the paper
-    for (auto it = vEvents_.begin(); it != ptr_e; it++)
+    for (auto it = vBatch_.begin(); it != vBatch_.end(); it++)
     {
       dvs_msgs::Event e = *it;
       int y = e.y / (int)ceil((double)sensor_size_.height / (double)y_patches_);
@@ -146,8 +146,8 @@ namespace image_representation
 
     std::fill(beta.begin(), beta.end(), 0);
     std::fill(last_event_time.begin(), last_event_time.end(), 0);
-    // Walk [begin, ptr_e) newest-first. The old loop started at ptr_e itself, which is end() whenever every buffered event predates the sync time.
-    for (std::vector<dvs_msgs::Event>::reverse_iterator rit(ptr_e); rit != vEvents_.rend(); ++rit) // traverse events in reverse to accumulate the latest events
+    // Walk this cycle's events newest-first. (An older version started at the sync-time iterator itself, which is end() whenever every buffered event predates the sync time.)
+    for (auto rit = vBatch_.rbegin(); rit != vBatch_.rend(); ++rit) // traverse events in reverse to accumulate the latest events
     {
       dvs_msgs::Event e = *rit;
       int y = e.y / (int)ceil((double)sensor_size_.height / (double)y_patches_);
@@ -200,7 +200,7 @@ namespace image_representation
       return;
     else
       bcreat_ = false;
-    std::lock_guard<std::mutex> lock(data_mutex_);
+    std::unique_lock<std::mutex> lock(data_mutex_);
     if (!bSensorInitialized_ || !bCamInfoAvailable_)
       return;
     
@@ -217,9 +217,18 @@ namespace image_representation
       std::vector<dvs_msgs::Event>::iterator ptr_e = EventVector_lower_bound(vEvents_, external_t);
       int distance = std::distance(vEvents_.begin(), ptr_e);
 
+      // Take this cycle's events out while holding data_mutex_, then build the
+      // images without it. eventsCallback() needs the same mutex for every
+      // message. Holding it for the whole TS/AA/Sobel computation (25 to 50 ms
+      // on the left node, against a 40 ms period) starved the callback: event
+      // messages queued up for 100+ ms and the TS rendered black.
+      vBatch_.assign(vEvents_.begin(), ptr_e);
+      clearEvents(distance, ptr_e);
+      lock.unlock();
+
       if (is_left_)   // generate AA and TS in parallel, just for left camera
       {
-        std::thread thread0(&ImageRepresentation::AA_thread, this, std::ref(ptr_e), distance, external_t);
+        std::thread thread0(&ImageRepresentation::AA_thread, this, distance, external_t);
         representation_TS_.setTo(cv::Scalar(0));
         cv::Mat TS_img = cv::Mat::zeros(sensor_size_, CV_64F);
 
@@ -228,7 +237,7 @@ namespace image_representation
         // double step = static_cast<double>(distance) / 90000.0;
 
         double step = 1;
-        std::vector<dvs_msgs::Event>::iterator it = vEvents_.begin();
+        std::vector<dvs_msgs::Event>::iterator it = vBatch_.begin();
 
         // generate TS map
         for (int i = 0; i < distance; i++)
@@ -297,7 +306,7 @@ namespace image_representation
         // double step = static_cast<double>(distance) / 90000.0;
         // if (step < 1)
         double step = 1;
-        std::vector<dvs_msgs::Event>::iterator it = vEvents_.begin();
+        std::vector<dvs_msgs::Event>::iterator it = vBatch_.begin();
         for (int i = 0; i < distance; i++)
         {
           int index = static_cast<int>(i * step);
@@ -323,8 +332,6 @@ namespace image_representation
         cv_TS_image.image = TS_img.clone();
         image_representation_pub_TS_.publish(cv_TS_image.toImageMsg());
       }
-
-      clearEvents(distance, ptr_e);
     }
   }
 

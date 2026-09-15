@@ -183,6 +183,12 @@ the same paths in the `sbg_ros_driver` clone.
   - `AA_thread()`'s reverse event loop started at `ptr_e`, which is
     `end()` whenever every buffered event predates the sync time; it now
     walks `[begin, ptr_e)` with a `reverse_iterator`.
+  - `createImageRepresentationAtTime()` held `data_mutex_` for the whole
+    TS/AA/Sobel computation, starving `eventsCallback()` (see "Gotchas").
+    It now copies the cycle's events into `vBatch_` and clears them from
+    `vEvents_` under the mutex, releases it, and builds the images from
+    `vBatch_`. `AA_thread()` reads `vBatch_` too. Same events, same
+    images.
 - **New:** `dependencies.yaml` entry for `sbg_ros_driver`.
 
 > **Local debug edits (not part of this work):** someone's in-progress
@@ -318,13 +324,28 @@ the same paths in the `sbg_ros_driver` clone.
   cycle outlasts the event stream, batches pile up without limit. Left
   does strictly more per cycle (an extra `AA_thread`, Sobel gradients, five
   publishers vs one), so it falls behind more. Now bounded (see "Changes
-  made"). The mutex is still held for the whole cycle, so under heavy load
-  the node will drop old event batches rather than grow.
+  made"). Under heavy load the node drops old event batches rather than
+  grow.
 - **Left time surface stalls under CPU load.** With the shared cfg's
   `generation_rate_hz: 100`, both nodes only reached ~20 Hz; the left one
   (227% CPU vs right's 133%) intermittently stopped publishing entirely
   while right stayed steady. Symptom in rqt: "the right image moves, the
   left doesn't". The launch file now targets 25 Hz.
+- **The left time surface flashed black for 1 to 5 frames under load**
+  (even with hot pixels masked and the rate capped). Per-frame monitoring
+  showed left events reaching ROS within 3 ms while the left node drew
+  from events 100+ ms old. Temporary instrumentation in the node found the
+  cause: `createImageRepresentationAtTime()` held `data_mutex_` for its
+  whole cycle (25 to 52 ms on the left node, against a 40 ms period at
+  25 Hz), and `eventsCallback()` needs that mutex for every message. The
+  callback was starved, event messages were already 145 to 170 ms old
+  when it got them, and each black flash matched a second with cycles
+  starting on events over 70 ms old. The right node does less per cycle
+  and never got there. Fixed by holding the mutex only to take the
+  cycle's events out (see "Changes made"). Measured with the left camera
+  at the 4M events/s cap for 28 of 30 s: no black frames on either side,
+  worst callback lock wait 16.8 ms (was 44 ms), worst message age at the
+  callback 33 ms (was 170 ms).
 - **roslaunch rejects `--` inside XML comments** (`not well-formed
   (invalid token)`), and a Python `xml.etree` well-formedness check does
   not catch it. Validate launch files with `roslaunch --nodes <pkg> <file>`.
