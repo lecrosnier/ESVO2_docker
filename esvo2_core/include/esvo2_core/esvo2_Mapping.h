@@ -84,7 +84,8 @@ namespace esvo2_core
     void publishMappingResults(
         DepthMap::Ptr depthMapPtr,
         Transformation tr,
-        ros::Time t);
+        ros::Time t,
+        cv::Mat TS_left_image);
     void publishPointCloud(
         DepthMap::Ptr &depthMapPtr,
         Transformation &tr,
@@ -166,7 +167,11 @@ namespace esvo2_core
     // online data
     EventQueue events_left_, events_right_;
     TimeSurfaceHistory TS_history_;
-    constStampedTimeSurfaceObs *TS_obs_ptr_;
+    constStampedTimeSurfaceObs *TS_obs_ptr_ = &emptyObs_;
+    // Sentinel TS_obs_ptr_ points at when no observation is loaded. Must stay
+    // empty; it replaces a pointer to a local that dangled once
+    // dataTransferring() returned.
+    constStampedTimeSurfaceObs emptyObs_;
     StampTransformationMap st_map_;
     std::shared_ptr<tf::Transformer> tf_;
     size_t TS_id_;

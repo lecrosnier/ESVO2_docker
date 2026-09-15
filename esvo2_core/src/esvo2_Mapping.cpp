@@ -499,7 +499,8 @@ namespace esvo2_core
     t_overall_count += time_optimize;
 
     std::thread tPublishMappingResult(&esvo2_Mapping::publishMappingResults, this,
-                                      depthFramePtr_->dMap_, depthFramePtr_->T_world_frame_, t);
+                                      depthFramePtr_->dMap_, depthFramePtr_->T_world_frame_, t,
+                                      TS_obs_ptr_->second.cvImagePtr_left_->image);
     tPublishMappingResult.detach();
 #ifdef ESVO2_CORE_MAPPING_LOG
     LOG(INFO) << "\n";
@@ -584,16 +585,15 @@ namespace esvo2_core
     dFusor_.naive_propagation(vdp_sgm, depthFramePtr_);
     // publish the invDepth map
     std::thread tPublishMappingResult(&esvo2_Mapping::publishMappingResults, this,
-                                      depthFramePtr_->dMap_, depthFramePtr_->T_world_frame_, t);
+                                      depthFramePtr_->dMap_, depthFramePtr_->T_world_frame_, t,
+                                      TS_obs_ptr_->second.cvImagePtr_left_->image);
     tPublishMappingResult.detach();
     return true;
   }
 
   bool esvo2_Mapping::dataTransferring()
   {
-    TS_obs_ptr_ = NULL; // clean the TS obs.
-    constStampedTimeSurfaceObs emptyObs;
-    TS_obs_ptr_ = reinterpret_cast<constStampedTimeSurfaceObs *>(&emptyObs);
+    TS_obs_ptr_ = &emptyObs_; // clean the TS obs.
 
     // To assure the esvo2_time_surface node has been working.
     if (TS_history_.size() <= 10)
@@ -916,9 +916,15 @@ namespace esvo2_core
     else
       TS_history_.emplace(t_new_TS, TimeSurfaceObservation(cv_ptr_left, cv_ptr_right, cv_ptr_AA_map_left, cv_ptr_negative, cv_ptr_negative_dx, cv_ptr_negative_dy, TS_id_, true));
     // keep TS_history's size constant
+    // Never erase the entry TS_obs_ptr_ points at: the mapping thread keeps
+    // reading it (SGM, block matching) after releasing data_mutex_, so erasing
+    // it is a use-after-free. Drop the next-oldest entry instead; the pinned
+    // one goes on a later call, once dataTransferring() has moved the pointer.
     while (TS_history_.size() > TS_HISTORY_LENGTH_)
     {
       auto it = TS_history_.begin();
+      if (&(*it) == TS_obs_ptr_)
+        ++it;
       TS_history_.erase(it);
     }
   }
@@ -1052,6 +1058,7 @@ namespace esvo2_core
     // clear all maintained data
     events_left_.clear();
     events_right_.clear();
+    TS_obs_ptr_ = &emptyObs_; // about to point into the cleared history
     TS_history_.clear();
     tf_->clear();
     pc_color_->clear();
@@ -1090,11 +1097,18 @@ namespace esvo2_core
   void esvo2_Mapping::publishMappingResults(
       DepthMap::Ptr depthMapPtr,
       Transformation tr,
-      ros::Time t)
+      ros::Time t,
+      cv::Mat TS_left_image)
   {
     cv::Mat invDepthImage, stdVarImage, ageImage, costImage, eventImage, confidenceMap, invDepthImage_rel;
 
-    invDepthImage = TS_obs_ptr_->second.cvImagePtr_left_->image.clone();
+    // TS_left_image is a snapshot taken on the calling (mapping) thread at
+    // spawn time, not a live dereference of the shared TS_obs_ptr_ member.
+    // TS_obs_ptr_ is mutated without synchronization by dataTransferring()
+    // (including being pointed at a local stack variable as a sentinel),
+    // and this function runs on a detached thread, so reading TS_obs_ptr_
+    // here raced against that mutation and segfaulted intermittently.
+    invDepthImage = TS_left_image.clone();
     visualizor_.plot_map(depthMapPtr, tools::InvDepthMap, invDepthImage,
                          invDepth_max_range_, invDepth_min_range_, stdVar_vis_threshold_, age_vis_threshold_);
     publishImage(invDepthImage, t, invDepthMap_pub_);

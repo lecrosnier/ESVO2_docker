@@ -56,12 +56,46 @@ index e81ff82..ffd16e2 100644
      /// \brief Wall timestamps
      ros::Time start_timestamp_, last_timestamp_;
  
+diff --git a/prophesee_ros_driver/package.xml b/prophesee_ros_driver/package.xml
+index ed661e6..63f8842 100644
+--- a/prophesee_ros_driver/package.xml
++++ b/prophesee_ros_driver/package.xml
+@@ -13,6 +13,7 @@
+   <buildtool_depend>catkin</buildtool_depend>
+ 
+   <depend>prophesee_event_msgs</depend>
++  <depend>dvs_msgs</depend>
+ 
+   <build_depend>roscpp</build_depend>
+   <build_depend>roslaunch</build_depend>
+diff --git a/prophesee_ros_driver/src/prophesee_ros_publisher.cpp b/prophesee_ros_driver/src/prophesee_ros_publisher.cpp
+index c71c3f9..5096adf 100644
+--- a/prophesee_ros_driver/src/prophesee_ros_publisher.cpp
++++ b/prophesee_ros_driver/src/prophesee_ros_publisher.cpp
+@@ -31,6 +31,7 @@ PropheseeWrapperPublisher::PropheseeWrapperPublisher() :
+     nh_.getParam("publish_cd", publish_cd_);
+     nh_.getParam("bias_file", biases_file_);
+     nh_.getParam("raw_file_to_read", raw_file_to_read_);
++    nh_.getParam("serial_number", serial_number_);
+     event_delta_t_ = ros::Duration(nh_.param<double>("event_delta_t", 100.0e-6));
+ 
+     const std::string topic_cam_info        = "/prophesee/" + camera_name_ + "/camera_info";
+@@ -73,7 +74,8 @@ bool PropheseeWrapperPublisher::openCamera() {
+     // Initialize the camera instance
+     try {
+         if (raw_file_to_read_.empty()) {
+-            camera_ = Metavision::Camera::from_first_available();
++            camera_ = serial_number_.empty() ? Metavision::Camera::from_first_available() :
++                                               Metavision::Camera::from_serial(serial_number_);
+ 
+             if (!biases_file_.empty()) {
+                 ROS_INFO("[CONF] Loading bias file: %s", biases_file_.c_str());
 diff --git a/prophesee_ros_driver/include/prophesee_ros_driver/prophesee_ros_stereo_publisher.h b/prophesee_ros_driver/include/prophesee_ros_driver/prophesee_ros_stereo_publisher.h
 new file mode 100644
-index 0000000..94e4aec
+index 0000000..4987dc8
 --- /dev/null
 +++ b/prophesee_ros_driver/include/prophesee_ros_driver/prophesee_ros_stereo_publisher.h
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,64 @@
 +/*******************************************************************
 + * File : prophesee_ros_stereo_publisher.h                         *
 + *                                                                 *
@@ -112,6 +146,8 @@ index 0000000..94e4aec
 +
 +private:
 +    bool openCamera(PropheseeStereoSide &side);
++    void maskPixels(PropheseeStereoSide &side, const std::string &param);
++    void limitEventRate(PropheseeStereoSide &side, int events_per_sec);
 +    void publishCDEvents(PropheseeStereoSide &side);
 +
 +    ros::NodeHandle nh_;
@@ -126,10 +162,10 @@ index 0000000..94e4aec
 +#endif /* PROPHESEE_ROS_STEREO_PUBLISHER_H_ */
 diff --git a/prophesee_ros_driver/launch/stereo.launch b/prophesee_ros_driver/launch/stereo.launch
 new file mode 100644
-index 0000000..5acb93d
+index 0000000..44f0364
 --- /dev/null
 +++ b/prophesee_ros_driver/launch/stereo.launch
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,31 @@
 +<launch>
 +  <!-- Stereo EVK4 rig. Serials fixed per this specific rig:
 +       00051860 = physically right camera (sync master, cabled SYNC OUT)
@@ -140,63 +176,47 @@ index 0000000..5acb93d
 +       their hardware sync cable relationship is process-exclusive at the HAL level. -->
 +  <arg name="left_serial" default="00051182" />
 +  <arg name="right_serial" default="00051860" />
++  <!-- Hardware event rate cap per camera in events/s, 0 disables it (see below) -->
++  <arg name="event_rate_limit" default="4000000" />
 +
 +  <node name="prophesee_ros_stereo_publisher" pkg="prophesee_ros_driver" type="prophesee_ros_stereo_publisher" output="screen">
 +    <param name="left_serial" type="str" value="$(arg left_serial)" />
 +    <param name="right_serial" type="str" value="$(arg right_serial)" />
 +    <param name="publish_cd" value="true" />
++    <!-- Hot pixels masked in the sensor, as [x, y] (max 64 per camera). Found
++         2026-09-15 by counting events per pixel: each fired 4.6M to 9M OFF
++         events/s, about 97% of the camera's output, which starved the time
++         surface nodes (images going black). Same pixels in repeated runs.
++         If a new one appears, add it here. -->
++    <rosparam param="left_masked_pixels">[[307, 456], [502, 34]]</rosparam>
++    <rosparam param="right_masked_pixels">[[596, 504]]</rosparam>
++    <!-- Hardware event rate cap per camera (IMX636 ERC), in events/s. During
++         fast motion the cameras reach 5 to 10M ev/s, more than the time
++         surface nodes can ingest, and their images go black. The sensor
++         drops events above this rate. 0 disables the cap. -->
++    <param name="event_rate_limit" type="int" value="$(arg event_rate_limit)" />
 +  </node>
 +</launch>
-diff --git a/prophesee_ros_driver/package.xml b/prophesee_ros_driver/package.xml
-index ed661e6..63f8842 100644
---- a/prophesee_ros_driver/package.xml
-+++ b/prophesee_ros_driver/package.xml
-@@ -13,6 +13,7 @@
-   <buildtool_depend>catkin</buildtool_depend>
- 
-   <depend>prophesee_event_msgs</depend>
-+  <depend>dvs_msgs</depend>
- 
-   <build_depend>roscpp</build_depend>
-   <build_depend>roslaunch</build_depend>
-diff --git a/prophesee_ros_driver/src/prophesee_ros_publisher.cpp b/prophesee_ros_driver/src/prophesee_ros_publisher.cpp
-index c71c3f9..5096adf 100644
---- a/prophesee_ros_driver/src/prophesee_ros_publisher.cpp
-+++ b/prophesee_ros_driver/src/prophesee_ros_publisher.cpp
-@@ -31,6 +31,7 @@ PropheseeWrapperPublisher::PropheseeWrapperPublisher() :
-     nh_.getParam("publish_cd", publish_cd_);
-     nh_.getParam("bias_file", biases_file_);
-     nh_.getParam("raw_file_to_read", raw_file_to_read_);
-+    nh_.getParam("serial_number", serial_number_);
-     event_delta_t_ = ros::Duration(nh_.param<double>("event_delta_t", 100.0e-6));
- 
-     const std::string topic_cam_info        = "/prophesee/" + camera_name_ + "/camera_info";
-@@ -73,7 +74,8 @@ bool PropheseeWrapperPublisher::openCamera() {
-     // Initialize the camera instance
-     try {
-         if (raw_file_to_read_.empty()) {
--            camera_ = Metavision::Camera::from_first_available();
-+            camera_ = serial_number_.empty() ? Metavision::Camera::from_first_available() :
-+                                               Metavision::Camera::from_serial(serial_number_);
- 
-             if (!biases_file_.empty()) {
-                 ROS_INFO("[CONF] Loading bias file: %s", biases_file_.c_str());
 diff --git a/prophesee_ros_driver/src/prophesee_ros_stereo_publisher.cpp b/prophesee_ros_driver/src/prophesee_ros_stereo_publisher.cpp
 new file mode 100644
-index 0000000..6751e4f
+index 0000000..5a6ee72
 --- /dev/null
 +++ b/prophesee_ros_driver/src/prophesee_ros_stereo_publisher.cpp
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,247 @@
 +/*******************************************************************
 + * File : prophesee_ros_stereo_publisher.cpp                       *
 + *******************************************************************/
 +
++#include <algorithm>
 +#include <thread>
 +
 +#include <ros/ros.h>
 +
 +#include <dvs_msgs/Event.h>
 +#include <dvs_msgs/EventArray.h>
++
++#include <metavision/hal/facilities/i_digital_event_mask.h>
++#include <metavision/hal/facilities/i_erc_module.h>
 +
 +#include "prophesee_ros_stereo_publisher.h"
 +
@@ -242,6 +262,90 @@ index 0000000..6751e4f
 +        side->cam_info_msg.width           = geometry.get_width();
 +        side->cam_info_msg.height          = geometry.get_height();
 +        side->cam_info_msg.header.frame_id = "PropheseeCamera_optical_frame";
++    }
++
++    maskPixels(left_, "left_masked_pixels");
++    maskPixels(right_, "right_masked_pixels");
++
++    const int event_rate_limit = nh_.param<int>("event_rate_limit", 0);
++    limitEventRate(left_, event_rate_limit);
++    limitEventRate(right_, event_rate_limit);
++}
++
++// Caps the sensor's output with its hardware event rate controller (ERC): above
++// the target rate the sensor drops events itself. During fast motion each EVK4
++// reaches 5 to 10M ev/s, which the time surface nodes can't ingest (their
++// images go black). events_per_sec <= 0 disables the cap.
++void PropheseeStereoPublisher::limitEventRate(PropheseeStereoSide &side, int events_per_sec) {
++    auto *erc = side.camera.get_device().get_facility<Metavision::I_ErcModule>();
++    if (!erc) {
++        if (events_per_sec > 0)
++            ROS_WARN("[%s] camera has no event rate controller, event_rate_limit ignored", side.camera_name.c_str());
++        return;
++    }
++    if (events_per_sec <= 0) {
++        erc->enable(false);
++        ROS_INFO("[%s] event rate cap disabled", side.camera_name.c_str());
++        return;
++    }
++
++    const uint32_t min_rate = erc->get_min_supported_cd_event_rate();
++    const uint32_t max_rate = erc->get_max_supported_cd_event_rate();
++    const uint32_t target   = std::min(std::max(static_cast<uint32_t>(events_per_sec), min_rate), max_rate);
++    if (target != static_cast<uint32_t>(events_per_sec))
++        ROS_WARN("[%s] event_rate_limit %d outside supported [%u, %u], using %u", side.camera_name.c_str(),
++                 events_per_sec, min_rate, max_rate, target);
++
++    const bool ok = erc->set_cd_event_rate(target) && erc->enable(true);
++    if (ok && erc->is_enabled())
++        ROS_INFO("[%s] event rate capped at %u ev/s", side.camera_name.c_str(), erc->get_cd_event_rate());
++    else
++        ROS_WARN("[%s] failed to cap event rate at %u ev/s", side.camera_name.c_str(), target);
++}
++
++// Masks hot pixels in the sensor itself (IMX636 digital event mask, 64 slots),
++// so they emit no events at all. param is a list of [x, y] pairs. A single
++// hot pixel on this rig fired ~9M events/s, ~97% of the camera's output.
++void PropheseeStereoPublisher::maskPixels(PropheseeStereoSide &side, const std::string &param) {
++    XmlRpc::XmlRpcValue list;
++    if (!nh_.getParam(param, list))
++        return;
++    if (list.getType() != XmlRpc::XmlRpcValue::TypeArray) {
++        ROS_WARN("[%s] %s must be a list of [x, y] pairs, ignoring it", side.camera_name.c_str(), param.c_str());
++        return;
++    }
++
++    auto *event_mask = side.camera.get_device().get_facility<Metavision::I_DigitalEventMask>();
++    if (!event_mask) {
++        ROS_WARN("[%s] camera has no digital event mask, %s ignored", side.camera_name.c_str(), param.c_str());
++        return;
++    }
++    const auto &slots = event_mask->get_pixel_masks();
++
++    size_t slot = 0;
++    for (int i = 0; i < list.size(); ++i) {
++        XmlRpc::XmlRpcValue &p = list[i];
++        if (p.getType() != XmlRpc::XmlRpcValue::TypeArray || p.size() != 2 ||
++            p[0].getType() != XmlRpc::XmlRpcValue::TypeInt || p[1].getType() != XmlRpc::XmlRpcValue::TypeInt) {
++            ROS_WARN("[%s] %s entry %d is not an [x, y] pair of ints, skipped", side.camera_name.c_str(), param.c_str(), i);
++            continue;
++        }
++        if (slot >= slots.size()) {
++            ROS_WARN("[%s] only %zu pixel masks available, remaining %s entries ignored", side.camera_name.c_str(),
++                     slots.size(), param.c_str());
++            break;
++        }
++        const int x = static_cast<int>(p[0]);
++        const int y = static_cast<int>(p[1]);
++        slots[slot]->set_mask(x, y, true);
++
++        const auto readback = slots[slot]->get_mask();
++        if (static_cast<int>(std::get<0>(readback)) == x && static_cast<int>(std::get<1>(readback)) == y &&
++            std::get<2>(readback))
++            ROS_INFO("[%s] masked pixel (%d, %d)", side.camera_name.c_str(), x, y);
++        else
++            ROS_WARN("[%s] failed to mask pixel (%d, %d)", side.camera_name.c_str(), x, y);
++        ++slot;
 +    }
 +}
 +

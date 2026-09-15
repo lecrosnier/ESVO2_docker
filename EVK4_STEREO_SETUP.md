@@ -104,6 +104,18 @@ These changes are stored in this repo as
   `target_link_libraries`). This broke `catkin_make`; removed the bad line.
 - **Modified:** `package.xml`: added a `dvs_msgs` dependency for the new
   stereo publisher.
+- **New:** hot pixel masking in the stereo publisher. The
+  `left_masked_pixels` / `right_masked_pixels` params (lists of `[x, y]`)
+  are written to the IMX636's hardware digital event mask (64 slots per
+  camera) right after the cameras open, read back, and logged as
+  `[left] masked pixel (x, y)`. `stereo.launch` sets this rig's three hot
+  pixels (see "Gotchas").
+- **New:** hardware event rate cap in the stereo publisher. The
+  `event_rate_limit` param (events/s per camera, `0` disables it) sets the
+  IMX636's event rate controller (ERC) and enables its event dropping,
+  read back and logged as `[left] event rate capped at 4000000 ev/s`.
+  `stereo.launch` exposes it as an arg, default 4000000, and
+  `evk4_live_all.launch` passes it through.
 
 ### `prophesee_to_dvs` (sibling package, not version controlled)
 
@@ -218,6 +230,43 @@ the same paths in the `sbg_ros_driver` clone.
 - **The Python bridge is too slow.** `prophesee_to_dvs.py` converting
   events in a pure-Python per-event loop can't sustain ~9500 msg/s:
   observed throughput dropped to ~210 msg/s (98% loss).
+- **Hot pixels flood both cameras and black out the time surfaces.** Three
+  stuck pixels, all firing OFF events only, produced ~97% of all events:
+  left (307, 456) and (502, 34) at ~4.6M events/s each, right (596, 504)
+  at ~9M events/s, against ~0.2M events/s from the rest of the frame. The
+  same pixels showed up in repeated runs. The time surface nodes can't
+  ingest ~9.5M events/s, so they fall behind; since each TS is drawn at
+  `ros::Time::now()` with a 20 ms decay, a node more than ~100 ms behind
+  renders fully black. Symptom: the left image goes black a few seconds
+  after start (its node does the most work), the right one briefly freezes
+  and flashes. This is very likely what "Left time surface stalls under
+  CPU load" below was. Fixed by masking the pixels in the sensor (see
+  "Changes made"). Measured after masking: no pixel above 1000 events/s,
+  0.3 to 1.1M events/s per camera with the rig still, and both time
+  surfaces at 21 to 25 Hz under hand-held motion with no black-outs. To
+  find new hot pixels, count events per pixel over a few seconds from
+  `/evk4_<side>/events` and look for pixels above ~1000 events/s. Don't
+  record a rosbag for this: at ~10M events/s, two seconds is ~400 MB and
+  loading it into memory got the desktop session OOM-killed.
+- **Fast motion still blacks out the time surfaces without a rate cap.**
+  With the hot pixels masked, hand-held shaking produces 5 to 10M real
+  events/s per camera, and the same falling-behind effect turns the images
+  black (left first). The time surface nodes kept up at 2 to 5M events/s
+  and fell behind at ~10M. Fixed with the ERC cap (`event_rate_limit`,
+  default 4M events/s; see "Changes made"): above the cap the sensor drops
+  events itself. Measured while shaking the rig hard: the right camera sat
+  at the cap (3.99M events/s), both time surfaces stayed at 25 Hz every
+  second, and the brightest TS pixel stayed at 96 to 177 (it had dropped
+  to 0 before). Raise the cap only if the time surface nodes get faster.
+  When checking it, pass params through `stereo.launch`, not `rosrun`:
+  `rosrun _left_masked_pixels:=...` delivers the list as a string, so the
+  driver ignores it (it logs a warning) and the hot pixels come back.
+- **The left camera records fewer events than the right on the same
+  scene.** Under identical motion, left sent 0.15 to 0.5M events/s while
+  right sent 0.5 to 1.8M, and the left time surface was 1.6 to 4.6% lit vs
+  5 to 22% for the right. Not investigated yet: check focus and aperture
+  on both lenses, then biases. It matters for stereo matching, which needs
+  both cameras to see the same edges.
 - **`metavision_calibration_pipeline`'s synced-cameras JSON path has an
   unguarded field read** (`device_node["settings-file"]` with no
   `.contains()` check, unlike the single-camera path). Omitting the key
@@ -332,13 +381,31 @@ the same paths in the `sbg_ros_driver` clone.
 
 ## How to launch everything
 
-Three terminals, run in order. All assume the workspace is already built
-and sourced:
+All of this assumes the workspace is already built and sourced:
 
 ```bash
 cd ~/catkin_ws && catkin_make
 source ~/catkin_ws/devel/setup.bash
 ```
+
+### One command
+
+```bash
+roslaunch esvo2_core evk4_live_all.launch
+```
+
+This starts the camera driver, the SBG IMU driver, and the pipeline
+(time surfaces, mapping, tracking, rqt, rviz). Options: `imu:=false` if
+the IMU isn't plugged in, `gui:=false` to run without rqt/rviz,
+`event_rate_limit:=<events/s>` to change the per-camera event rate cap
+(default 4000000, `0` disables it). All output
+lands in one terminal, and a camera that fails to open is only reported
+near the top of it, so use the three-terminal way below when debugging
+hardware. Ctrl+C stops everything.
+
+### Three terminals (easier to debug)
+
+Run in order.
 
 **Terminal 1: camera driver** (opens both EVK4s, publishes events):
 
