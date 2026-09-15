@@ -146,6 +146,17 @@ the same paths in the `sbg_ros_driver` clone.
   adapter came back as `ttyUSB1` instead of `ttyUSB0` after a replug).
 - **New:** `launch/sbg_evk4_rig.launch`: loads that config and starts
   `sbg_device`.
+- **Device settings changed on the unit itself (not in any file):** the
+  `IMU_DATA` (msg 3) and `EKF_QUAT` (msg 7) outputs on port A were raised
+  from 25 Hz (mode 8) to 200 Hz (mode 1) and saved to the Ellipse2-N's
+  flash, using a one-off program built against the driver's bundled
+  sbgECom (`sbgEComCmdOutputGetConf` to read, `sbgEComCmdOutputSetConf`,
+  read-back, then `sbgEComCmdSettingsAction(SBG_ECOM_SAVE_SETTINGS)`).
+  Nothing else on the unit was touched. The program lived in a scratch
+  directory and was not kept. `log_imu_data: 1` / `log_ekf_quat: 1` in the
+  YAML only record this (see "Gotchas": the driver doesn't apply them).
+  Measured afterwards: `/sbg/imu_data` 201.5 Hz, `/sbg/ekf_quat` 200.0 Hz,
+  `/imu/data` 200.0 Hz, gravity 9.824 m/s² at rest.
 - No source code in this package was modified; its fixed-point scaling bug
   (see "Gotchas") is worked around via config.
 
@@ -295,6 +306,26 @@ the same paths in the `sbg_ros_driver` clone.
   scales. `linear_acceleration.z` read ≈10<sup>7</sup> instead of ≈9.8.
   Worked around with `log_imu_short: 0`, which falls back to the
   float-typed `SbgImuData` log.
+- **The SBG YAML's output rates are not applied to the device.** With
+  `confWithRos: false` the driver only reads; the unit keeps the output
+  modes stored in its flash, so editing `log_imu_data` alone changed
+  nothing (still 25 Hz). `confWithRos: true` would apply them, but it also
+  writes every other YAML group to the unit (motion profile, alignment,
+  lever arms, magnetometer, GNSS, odometer) and saves, overwriting its
+  current settings with mostly stock defaults, so the rates were set
+  directly instead (see "Changes made").
+- **`/imu/data` only publishes when an IMU sample and an EKF quaternion
+  have the same timestamp** (`MessagePublisher::processRosImuMessage()`).
+  With `IMU_DATA` at 200 Hz but `EKF_QUAT` at 25 Hz, `/sbg/imu_data` ran at
+  200 Hz while `/imu/data` stayed at 25 Hz. Keep both outputs at the same
+  rate. ESVO2 only reads `linear_acceleration`, `angular_velocity` and the
+  header stamp from it, not the orientation.
+- **`/imu/data` timestamps are bunched.** `time_reference: "ros"` stamps
+  each message when the serial read returns, and the link delivers
+  samples in batches: 65% of consecutive `header.stamp` gaps were under
+  1 ms (median 0.04 ms, p90 15 ms, max 20 ms), while the IMU's own clock
+  (`/sbg/imu_data` `time_stamp`) showed exactly 5.00 ms every time. Fine
+  for display, not for preintegration (see "Known limitations").
 - **`bVisualizeGlobalPC: True` grows memory without bound.**
   `esvo2_Mapping.cpp` reserves `pc_global_` for 5M points and only ever
   appends to it, re-serializing and re-publishing it to rviz on every
@@ -374,7 +405,27 @@ the same paths in the `sbg_ros_driver` clone.
 - **IMU fusion is disabled** (`USE_IMU: False` in both cfgs). With it
   enabled and `T_b_c` at identity, tracking did produce poses but they
   diverged to hundreds of meters within seconds of hand-held motion.
-  Needs a real IMU-camera extrinsic calibration first.
+  With it disabled, mapping doesn't subscribe to `/imu/data` but still
+  calls `getIMUInterval()` every cycle, which is where the repeated
+  `not receive imu data` error comes from (harmless). Tracking subscribes
+  but ignores the data. Before re-enabling:
+  - **`T_b_c` is wrong, not just uncalibrated.** It's exactly identity,
+    i.e. IMU axes = camera optical axes. At rest the IMU (ENU) reads
+    gravity along its +z, while ESVO2 expects gravity along the camera y
+    axis (`g_optimal {0, 9.81, 0}`), so identity puts gravity along the
+    camera's viewing direction, ~90° off. This alone explains the runaway
+    drift. Needs a camera-IMU calibration (e.g. Kalibr) for rotation,
+    lever arm and time offset.
+  - **Timestamps:** `/imu/data` stamps are bunched (see "Gotchas").
+    Options: `time_reference: "ins_unix"` (even IMU-clock spacing, but a
+    different time base than the cameras, so the offset must be
+    calibrated) or re-stamping from `/sbg/imu_data`'s `time_stamp`
+    anchored to ROS time.
+  - **Tracking hardcodes the IMU sample period:**
+    `esvo2_Tracking::refImuCallback()` calls `imu_data_.push_back(0.001,
+    acc, gyr)`, i.e. assumes 1000 Hz. At 200 Hz this under-integrates
+    motion by 5x unless the real dt is used.
+  - Rate is done: `/imu/data` now runs at 200 Hz (was 25 Hz).
 - **`esvo2_Mapping` and `esvo2_Tracking` use a lot of memory, but it's
   bounded, not a leak.** Each keeps a history of `TS_HISTORY_LENGTH` (100)
   time-surface observations, and each observation stores 6–10
