@@ -1,5 +1,7 @@
 <launch>
-  <!-- Live stereo EVK4 rig + SBG IMU. Requires, run beforehand in separate terminals:
+  <!-- Live stereo EVK4 rig + SBG IMU. To start drivers and pipeline together use
+         roslaunch esvo2_core evk4_live_all.launch
+       This file alone needs the drivers running beforehand in separate terminals:
          roslaunch prophesee_ros_driver stereo.launch
          roslaunch sbg_driver sbg_evk4_rig.launch
        (cameras publish dvs_msgs on /evk4_left|right/events; SBG publishes
@@ -9,6 +11,8 @@
 
   <!-- Calibration folder -->
   <arg name="calibInfoDirStr" default="$(find esvo2_core)/calib/evk4_stereo"/>
+  <!-- gui:=false skips rqt and rviz (headless) -->
+  <arg name="gui" default="true"/>
 
   <node name="image_representation_left" pkg="image_representation" type="image_representation" output="screen" >
     <remap from="events" to="/evk4_left/events" />
@@ -77,6 +81,8 @@
   </node>
 
   <!-- Visualization -->
-  <node pkg="rqt_gui" type="rqt_gui" name="rqt_gui" args="--perspective-file $(find esvo2_core)/esvo2_system_DSEC.perspective" />
-  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find esvo2_core)/esvo2_system_DSEC.rviz" />
+  <group if="$(arg gui)">
+    <node pkg="rqt_gui" type="rqt_gui" name="rqt_gui" args="--perspective-file $(find esvo2_core)/esvo2_system_DSEC.perspective" />
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find esvo2_core)/esvo2_system_DSEC.rviz" />
+  </group>
 </launch>

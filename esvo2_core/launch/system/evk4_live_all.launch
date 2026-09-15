@@ -1,0 +1,37 @@
+<launch>
+  <!-- Live stereo EVK4 rig, everything in one command:
+         roslaunch esvo2_core evk4_live_all.launch
+       Starts the stereo camera driver, the SBG IMU driver, and the ESVO2
+       pipeline (time surfaces, mapping, tracking, rqt, rviz).
+
+       Args:
+         imu:=false   skip the SBG driver (IMU unplugged; USE_IMU is False anyway)
+         gui:=false   skip rqt and rviz (headless)
+
+       roslaunch does not start nodes in order. That is fine here: the time
+       surface nodes wait for events and mapping waits for time surfaces.
+       Ctrl+C stops everything. For debugging, the three launch files included
+       below can still be run in separate terminals (see EVK4_STEREO_SETUP.md). -->
+  <arg name="imu" default="true" />
+  <arg name="gui" default="true" />
+  <arg name="left_serial" default="00051182" />
+  <arg name="right_serial" default="00051860" />
+  <arg name="event_rate_limit" default="4000000" />
+  <arg name="calibInfoDirStr" default="$(find esvo2_core)/calib/evk4_stereo" />
+
+  <!-- Cameras: both EVK4s from a single process (required by the sync cable) -->
+  <include file="$(find prophesee_ros_driver)/launch/stereo.launch">
+    <arg name="left_serial" value="$(arg left_serial)" />
+    <arg name="right_serial" value="$(arg right_serial)" />
+    <arg name="event_rate_limit" value="$(arg event_rate_limit)" />
+  </include>
+
+  <!-- IMU: publishes sensor_msgs/Imu on /imu/data -->
+  <include if="$(arg imu)" file="$(find sbg_driver)/launch/sbg_evk4_rig.launch" />
+
+  <!-- ESVO2 pipeline -->
+  <include file="$(find esvo2_core)/launch/system/system_evk4_mapping.launch">
+    <arg name="gui" value="$(arg gui)" />
+    <arg name="calibInfoDirStr" value="$(arg calibInfoDirStr)" />
+  </include>
+</launch>
