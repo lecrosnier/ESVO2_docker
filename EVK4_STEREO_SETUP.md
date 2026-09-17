@@ -6,12 +6,17 @@ repo only ships launch files for offline rosbags (DSEC/RPG) and a live
 DVXplorer rig.
 
 **Current status:** the full pipeline launches and runs (cameras, IMU,
-time surfaces, mapping, tracking, visualization), and the crashes and
-memory leaks found so far are fixed. Pose estimation does **not** work
+time surfaces, mapping, tracking, visualization); the crashes, black-outs
+and memory leaks found along the way (hot pixels, the event-rate cap, the
+time-surface lock fix) are fixed. Pose estimation does **not** work
 reliably yet: stereo (SGM) initialization does succeed, but the local map
 then collapses below the 300 points tracking needs, so the system keeps
-resetting. IMU fusion is disabled because it diverged. See "Known
-limitations".
+resetting. Gyro rotation prediction is calibrated and **enabled**
+(`IMU_ROTATION_PREDICTION: True`): tracking's rotation follows the gyro at
+ratios 1.00-1.04 across every speed band with real motion (was 0.04-0.45
+with it off). Translation is still vision-only, ESVO2's own IMU fusion
+path (`USE_IMU`) remains off, and the pose still drifts when the rig is
+nearly stationary. See "Known limitations".
 
 ## Hardware
 
@@ -242,10 +247,12 @@ the same paths in the `sbg_ros_driver` clone.
   ESVO2's original `USE_IMU` path stays off. Validation
   (`esvo2_core/scripts/validate_rotation_tracking.py`), prediction OFF vs
   ON:
-  - Slow-turn holds: gyro 71.3° / 71.0° vs pose 11.3° / 11.8° OFF
-    (16–17% followed); gyro 77.4° / 77.8° vs pose 84.1° / 84.6° ON (9%
-    error), one later hold gyro 73.3° vs pose 89.5° (22%, see "Known
-    limitations").
+  - Slow-turn holds, coverage = pose / gyro, error = |coverage − 100%|:
+    prediction OFF, gyro 71.3° / 71.0° vs pose 11.3° / 11.8° — coverage
+    16% / 17% (84% / 83% error); prediction ON, gyro 77.4° / 77.8° vs
+    pose 84.1° / 84.6° — coverage 109% / 109% (9% error each); one later
+    ON hold, gyro 73.3° vs pose 89.5° — coverage 122% (22% error, see
+    "Known limitations").
   - Mixed motion, pose/gyro rotation-speed ratio by gyro band (OFF → ON):
     0.0–0.1 rad/s 2.06 → 1.56; 0.1–0.5 0.45 → 1.04; 0.5–1.2 0.12 → 1.01;
     >1.2 0.04 → 1.00.
@@ -474,10 +481,11 @@ the same paths in the `sbg_ros_driver` clone.
   band, where real motion (~0.05 rad/s) sits below the pre-existing
   ~0.08 rad/s pose noise floor — the predictor amplifies that noise rather
   than tracking real rotation. This accumulated stationary drift is what
-  pushed one slow-turn hold to 22% error, above the plan's 20% criterion
-  (the other three holds were 9%, 16% and 17%). Record this as a known
-  limitation, not a pass: it is not fixed by better calibration, only by a
-  motion/stillness gate on the predictor.
+  pushed one slow-turn hold (prediction ON) to 22% error, above the plan's
+  20% criterion; the other two evaluated ON holds were 9% each (a further
+  near-still hold was excluded by the validation script's <5° rule).
+  Record this as a known limitation, not a pass: it is not fixed by better
+  calibration, only by a motion/stillness gate on the predictor.
 - **IMU fusion is disabled** (`USE_IMU: False` in both cfgs). Gyro-based
   rotation prediction is on in tracking (see "Changes made"), but
   translation still comes only from vision, mapping's IMU backend
@@ -579,8 +587,14 @@ rostopic echo -n 1 /imu/data
 The magnitude of `linear_acceleration` should be close to 9.8 (gravity)
 when the rig is still. If `/imu/data` never appears, or you see
 `SBG_TIME_OUT` in this terminal, re-check the baud rate (see "Gotchas").
-The IMU isn't currently used by mapping/tracking (`USE_IMU: False`), but
-running it keeps `/imu/data` available.
+Mapping never uses the IMU. Tracking has two separate IMU flags: its own
+fusion path (`USE_IMU`) is off, but gyro rotation prediction
+(`IMU_ROTATION_PREDICTION: True`, see "Changes made") is on and needs
+`/imu/data_synced`, published by `imu_restamp.py` — not started by this
+three-terminal flow (it's started by `evk4_live_all.launch`'s `imu:=true`,
+or run it manually). Without that topic, tracking still runs but with no
+rotation prior. Running this terminal at least keeps `/imu/data` available
+for the sanity check above.
 
 **Terminal 3: mapping, tracking, and visualization:**
 
