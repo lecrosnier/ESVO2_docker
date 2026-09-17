@@ -725,8 +725,11 @@ void esvo2_Tracking::predictRotationWithGyro(double t_prev_frame, double t_cur_f
   {
     LOG(INFO) << "IMU rotation prediction: " << nPredOk_ << " predicted, " << nPredSkip_ << " skipped, mean "
               << (nPredOk_ ? predAngleSumDeg_ / nPredOk_ : 0.0) << " deg/frame";
-    if (nPredSkip_ > 0 && nPredOk_ == 0)
-      LOG(WARNING) << "IMU rotation prediction: no gyro coverage (is /imu/data_synced publishing?)";
+    const size_t nTotal = nPredOk_ + nPredSkip_;
+    if (nPredSkip_ > 0 && 10 * nPredSkip_ >= nTotal)
+      LOG(WARNING) << "IMU rotation prediction skipped " << nPredSkip_ << " of " << nTotal << " frames ("
+                   << (nTotal ? 100.0 * nPredSkip_ / nTotal : 0.0)
+                   << "%) in the last 5 s — check /imu/data_synced";
     nPredOk_ = nPredSkip_ = 0;
     predAngleSumDeg_ = 0.0;
     lastPredLog_ = ros::WallTime::now();
