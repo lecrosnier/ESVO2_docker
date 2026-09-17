@@ -1,6 +1,7 @@
 #ifndef ESVO2_CORE_TOOLS_GYRO_PREDICTION_H
 #define ESVO2_CORE_TOOLS_GYRO_PREDICTION_H
 
+#include <algorithm>
 #include <vector>
 #include <Eigen/Core>
 #include <Eigen/Geometry>

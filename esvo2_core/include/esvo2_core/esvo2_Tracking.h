@@ -164,6 +164,7 @@ namespace esvo2_core
     size_t nPredOk_ = 0, nPredSkip_ = 0;
     double predAngleSumDeg_ = 0.0;
     ros::WallTime lastPredLog_;
+    bool bGyroJumpWarned_ = false; // re-arms once a sample is accepted normally again
     std::string resultPath_;
 
     Eigen::Matrix<double, 4, 4> T_world_ref_;

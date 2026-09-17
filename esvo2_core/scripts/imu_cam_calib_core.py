@@ -78,6 +78,14 @@ def estimate_time_offset(t_cam, s_cam, t_imu, s_imu, max_offset=0.1, step=0.001)
     lo, hi = t_imu[0] + max_offset, t_imu[-1] - max_offset
     m = (t_cam >= lo) & (t_cam <= hi)
     tc, sc = t_cam[m], s_cam[m]
+    if tc.size < 10:
+        raise ValueError(
+            "estimate_time_offset: insufficient overlap between camera and IMU spans "
+            "(camera [%.3f, %.3f], IMU [%.3f, %.3f], max_offset=%.3f) -- only %d samples "
+            "remain after trimming max_offset off each end" % (
+                t_cam[0] if t_cam.size else float('nan'),
+                t_cam[-1] if t_cam.size else float('nan'),
+                t_imu[0], t_imu[-1], max_offset, tc.size))
     sc = (sc - sc.mean()) / (sc.std() + 1e-12)
     corrs = []
     for d in offsets:

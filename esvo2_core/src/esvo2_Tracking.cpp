@@ -693,8 +693,27 @@ void esvo2_Tracking::imuPredictionCallback(const sensor_msgs::ImuConstPtr &msg)
 {
   std::lock_guard<std::mutex> lock(gyro_mutex_);
   const double t = msg->header.stamp.toSec();
-  if (!gyroBuf_.empty() && t <= gyroBuf_.back().t)
-    return;
+  if (!gyroBuf_.empty() && t < gyroBuf_.back().t - 2.0)
+  {
+    // Stamp jumped backwards further than the buffer span (clock step, sim time reset, bag
+    // loop, relay re-anchor): the ordinary rejection below would otherwise stall prediction
+    // forever, since gyroBuf_.back().t would never advance again. Recover by resetting.
+    if (!bGyroJumpWarned_)
+    {
+      LOG(WARNING) << "IMU rotation prediction: gyro stamp jumped backwards from "
+                   << gyroBuf_.back().t << " to " << t << " s; resetting gyro buffer";
+      bGyroJumpWarned_ = true;
+    }
+    gyroBuf_.clear();
+  }
+  else if (!gyroBuf_.empty() && t <= gyroBuf_.back().t)
+  {
+    return; // ordinary out-of-order sample: drop it
+  }
+  else
+  {
+    bGyroJumpWarned_ = false; // sequence is healthy again
+  }
   gyroBuf_.push_back({t, Eigen::Vector3d(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z)});
   while (!gyroBuf_.empty() && gyroBuf_.front().t < t - 2.0)
     gyroBuf_.pop_front();

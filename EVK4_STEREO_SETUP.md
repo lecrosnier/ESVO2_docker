@@ -484,7 +484,7 @@ the same paths in the `sbg_ros_driver` clone.
   pushed one slow-turn hold (prediction ON) to 22% error, above the plan's
   20% criterion; the other two evaluated ON holds were 9% each (a further
   near-still hold was excluded by the validation script's <5° rule).
-  Record this as a known limitation, not a pass: it is not fixed by better
+  This is a known limitation, not a pass: it is not fixed by better
   calibration, only by a motion/stillness gate on the predictor.
 - **IMU fusion is disabled** (`USE_IMU: False` in both cfgs). Gyro-based
   rotation prediction is on in tracking (see "Changes made"), but
@@ -498,6 +498,13 @@ the same paths in the `sbg_ros_driver` clone.
   from (harmless). Before re-enabling `USE_IMU`:
   - **Lever arm not calibrated.** `T_b_c`'s rotation is now measured (see
     "Changes made"), but its translation is still 0.
+  - **Extrinsic convention mismatch.** This calibration measured `R_b_c`
+    under `p_imu = R_b_c * p_cam`, and the rotation predictor applies it as
+    `R_b_c^T * R_imu * R_b_c`. ESVO2's own IMU fusion path composes the
+    extrinsic the other way round, as `R_b_c * q * R_b_c^T` — the opposite
+    convention. Enabling `USE_IMU` on the strength of "the rotation is now
+    calibrated" would apply it backwards; the extrinsic must be re-derived
+    (or transposed and verified) for the fusion path before relying on it.
   - **IMU sample period:** `esvo2_Tracking::refImuCallback()` uses the real
     stamp difference; only the very first sample gets `0.001` s. (An earlier
     version of this note wrongly said it assumed 1000 Hz.) With the bunched
@@ -592,9 +599,11 @@ fusion path (`USE_IMU`) is off, but gyro rotation prediction
 (`IMU_ROTATION_PREDICTION: True`, see "Changes made") is on and needs
 `/imu/data_synced`, published by `imu_restamp.py` — not started by this
 three-terminal flow (it's started by `evk4_live_all.launch`'s `imu:=true`,
-or run it manually). Without that topic, tracking still runs but with no
-rotation prior. Running this terminal at least keeps `/imu/data` available
-for the sanity check above.
+or run it manually with `rosrun esvo2_core imu_restamp.py`). Without that
+topic, prediction is inactive in this manual flow: tracking still runs but
+with no rotation prior, and logs a skip-rate warning every 5 s. Running
+this terminal at least keeps `/imu/data` available for the sanity check
+above.
 
 **Terminal 3: mapping, tracking, and visualization:**
 

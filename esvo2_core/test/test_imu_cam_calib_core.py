@@ -98,6 +98,17 @@ class CalibCoreTest(unittest.TestCase):
         # so this bound pins the "50 ms" half of the definition.
         self.assertLess(sharp, 0.2)
 
+    def test_time_offset_raises_on_insufficient_overlap(self):
+        # Camera and IMU spans barely overlap: after trimming max_offset off each end of
+        # the IMU span, almost no camera samples remain. Silently returning a sentinel
+        # offset here would look like a real answer, so this must raise instead.
+        t = np.arange(0.0, 20.0, 0.005)
+        s = np.abs(np.sin(1.3 * t)) + 0.5 * np.abs(np.sin(3.1 * t + 0.4))
+        t_cam = np.arange(19.85, 19.95, 0.01)  # entirely inside the trimmed-out [hi, +inf) region
+        s_cam = np.interp(t_cam, t, s)
+        with self.assertRaises(ValueError):
+            c.estimate_time_offset(t_cam, s_cam, t, s, max_offset=0.1, step=0.001)
+
     def test_fit_R_b_c_with_outliers(self):
         rng = np.random.default_rng(3)
         R_b_c = c.so3_exp(np.array([1.2, -0.4, 0.3]))

@@ -122,7 +122,12 @@ def camera_rates(frames_q, stop, calib, window, results):
 def solve(cam, imu, label, min_moving=50):
     t_cam = np.array([c[0] for c in cam]); w_cam = np.array([c[1] for c in cam])
     t_imu = np.array([i[0] for i in imu]); w_imu = np.array([i[1] for i in imu])
-    t_d, corr, sharp = core.estimate_time_offset(t_cam, np.linalg.norm(w_cam, axis=1), t_imu, np.linalg.norm(w_imu, axis=1))
+    try:
+        t_d, corr, sharp = core.estimate_time_offset(
+            t_cam, np.linalg.norm(w_cam, axis=1), t_imu, np.linalg.norm(w_imu, axis=1))
+    except ValueError as e:
+        print("[%s] %s (unusable capture; skipping fit)" % (label, e))
+        return None, None, None, 0
     w_imu_at_cam = np.stack([np.interp(t_cam - t_d, t_imu, w_imu[:, k]) for k in range(3)], axis=1)
     moving = np.linalg.norm(w_imu_at_cam, axis=1) > 0.2
     n_moving = moving.sum()
