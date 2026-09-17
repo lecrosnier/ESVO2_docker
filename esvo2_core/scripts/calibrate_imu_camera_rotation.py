@@ -49,17 +49,33 @@ class EventFramer:
         ts = e['s'].astype(np.float64) + e['ns'] * 1e-9
         if self.t0 is None:
             self.t0 = ts[0]
-        win_end = self.t0 + self.window
-        if ts[-1] >= win_end:
+
+        # Loop to handle messages spanning multiple windows
+        spans_count = 0
+        while True:
+            win_end = self.t0 + self.window
+            if ts[-1] < win_end:
+                # All remaining events fit in current window
+                self.idx.append((e['y'] // SCALE).astype(np.int64) * self.w + e['x'] // SCALE)
+                break
+
+            # Events cross win_end boundary
+            spans_count += 1
             before = ts < win_end
             if before.any():
                 self.idx.append((e['y'][before] // SCALE).astype(np.int64) * self.w + e['x'][before] // SCALE)
             self._flush(win_end)
-            self.t0 = win_end if ts[-1] < win_end + self.window else ts[-1]
-            rest = ~before
-            self.idx.append((e['y'][rest] // SCALE).astype(np.int64) * self.w + e['x'][rest] // SCALE)
-        else:
-            self.idx.append((e['y'] // SCALE).astype(np.int64) * self.w + e['x'] // SCALE)
+
+            # Keep only events after this window
+            rest_mask = ~before
+            if not rest_mask.any():
+                break
+            e = e[rest_mask]
+            ts = ts[rest_mask]
+            self.t0 = win_end
+
+        if spans_count > 1:
+            print("!!! message spanned %d windows (driver batching or ROS delivery burst)" % spans_count)
 
     def _flush(self, t_end):
         if not self.idx:
@@ -103,16 +119,25 @@ def camera_rates(frames_q, stop, calib, window, results):
         prev = (t, img)
 
 
-def solve(cam, imu, label):
+def solve(cam, imu, label, min_moving=50):
     t_cam = np.array([c[0] for c in cam]); w_cam = np.array([c[1] for c in cam])
     t_imu = np.array([i[0] for i in imu]); w_imu = np.array([i[1] for i in imu])
     t_d, corr, sharp = core.estimate_time_offset(t_cam, np.linalg.norm(w_cam, axis=1), t_imu, np.linalg.norm(w_imu, axis=1))
     w_imu_at_cam = np.stack([np.interp(t_cam - t_d, t_imu, w_imu[:, k]) for k in range(3)], axis=1)
     moving = np.linalg.norm(w_imu_at_cam, axis=1) > 0.2
+    n_moving = moving.sum()
+
+    print("[%s] t_d=%.4f s (corr %.3f, sharpness %.3f) | pairs %d moving" % (label, t_d, corr, sharp, int(n_moving)), end='')
+
+    if n_moving < min_moving:
+        print(" (< %d minimum; skipping fit)" % min_moving)
+        return None, None, None, n_moving
+
     R, inl, rms = core.fit_R_b_c(w_imu_at_cam[moving], w_cam[moving])
-    print("[%s] t_d=%.4f s (corr %.3f, sharpness %.3f) | pairs %d moving, inliers %.0f%%, rms %.3f rad/s" % (
-        label, t_d, corr, sharp, int(moving.sum()), 100.0 * inl.mean(), rms))
-    return R, t_d, dict(corr=corr, sharpness=sharp, pairs=int(moving.sum()), inlier_share=float(inl.mean()), rms=rms)
+    print(", inliers %.0f%%, rms %.3f rad/s" % (100.0 * inl.mean(), rms))
+
+    quality = dict(corr=corr, sharpness=sharp, pairs=int(n_moving), inlier_share=float(inl.mean()), rms=rms)
+    return R, t_d, quality, n_moving
 
 
 def main():
@@ -149,16 +174,38 @@ def main():
         print("not enough data; repeat the capture with more texture / motion")
         return
 
-    R, t_d, q = solve(cam, imu, 'all')
+    R, t_d, q, n_moving_all = solve(cam, imu, 'all', min_moving=50)
+    if R is None:
+        print("not enough rig rotation (< 50 moving camera-rate samples); capture is unusable")
+        return
+
+    # Get half split for repeatability check
     half = cam[len(cam) // 2][0]
-    R1, t1, _ = solve([c for c in cam if c[0] < half], imu, 'first half')
-    R2, t2, _ = solve([c for c in cam if c[0] >= half], imu, 'second half')
-    rep_deg = float(np.degrees(np.linalg.norm(core.so3_log(R1.T @ R2))))
+    R1, t1, q1, n1 = solve([c for c in cam if c[0] < half], imu, 'first half', min_moving=50)
+    R2, t2, q2, n2 = solve([c for c in cam if c[0] >= half], imu, 'second half', min_moving=50)
+
+    # Compute repeatability only if both halves are valid
+    rep_deg = None
+    half_t_diff_ms = None
+    if R1 is not None and R2 is not None:
+        rep_deg = float(np.degrees(np.linalg.norm(core.so3_log(R1.T @ R2))))
+        half_t_diff_ms = 1000.0 * abs(t1 - t2)
+        q['half_rotation_diff_deg'] = rep_deg
+        q['half_t_d_diff_ms'] = half_t_diff_ms
+    else:
+        q['half_rotation_diff_deg'] = None
+        q['half_t_d_diff_ms'] = None
+
     perm_deg = core.signed_permutation_distance_deg(R)
+    q['permutation_distance_deg'] = perm_deg
+
     print("R_b_c =\n%s" % np.array2string(R, precision=4, suppress_small=True))
-    print("repeatability: halves differ by %.2f deg and %.1f ms | distance to nearest axis permutation %.2f deg" % (
-        rep_deg, 1000.0 * abs(t1 - t2), perm_deg))
-    q.update(half_rotation_diff_deg=rep_deg, half_t_d_diff_ms=1000.0 * abs(t1 - t2), permutation_distance_deg=perm_deg)
+    if rep_deg is not None:
+        print("repeatability: halves differ by %.2f deg and %.1f ms | distance to nearest axis permutation %.2f deg" % (
+            rep_deg, half_t_diff_ms, perm_deg))
+    else:
+        print("repeatability: halves unavailable (insufficient rotation in one or both half) | distance to nearest axis permutation %.2f deg" % perm_deg)
+
     with open(out_path, 'w') as fh:
         yaml.safe_dump({'R_b_c': [float(x) for x in R.reshape(-1)], 't_d': float(t_d), 'quality': q}, fh, sort_keys=False)
     print("results written to %s (calibration files NOT modified)" % out_path)
