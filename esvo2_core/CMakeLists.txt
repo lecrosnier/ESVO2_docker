@@ -99,3 +99,12 @@ cs_add_executable(esvo2_Tracking src/esvo2_TrackingNode.cpp
     src/esvo2_Tracking.cpp include/esvo2_core/esvo2_Tracking.h)
 target_link_libraries(esvo2_Tracking ${PROJECT_NAME}_LIB
     ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp)
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_gyro_prediction test/test_gyro_prediction.cpp)
+  if(TARGET test_gyro_prediction)
+    # catkin_add_gtest only links libgtest (not gtest_main) in this environment's
+    # source-build path, so TEST() files with no main() of their own need it added.
+    target_link_libraries(test_gyro_prediction gtest_main)
+  endif()
+endif()
