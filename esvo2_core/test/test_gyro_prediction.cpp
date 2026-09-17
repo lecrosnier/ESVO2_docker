@@ -62,8 +62,38 @@ TEST(GyroPrediction, RejectsMissingCoverageAndLongIntervals)
   EXPECT_FALSE(gyroDeltaRotation(s, 1.95, 2.05, 0.0, R));   // last sample 50 ms before t_to
   EXPECT_TRUE(gyroDeltaRotation(s, 0.99, 1.05, 0.0, R));    // 10 ms gap is tolerated
   EXPECT_FALSE(gyroDeltaRotation(s, 1.1, 1.35, 0.0, R));    // longer than 0.2 s
+  EXPECT_TRUE(gyroDeltaRotation(s, 1.0, 1.2, 0.0, R));      // exactly 0.2 s is still accepted
   EXPECT_FALSE(gyroDeltaRotation(s, 1.2, 1.2, 0.0, R));     // empty interval
+  EXPECT_FALSE(gyroDeltaRotation(s, 1.05, 1.0, 0.0, R));    // reversed interval (t_to < t_from)
   EXPECT_FALSE(gyroDeltaRotation({}, 1.0, 1.04, 0.0, R));   // no samples
+
+  // Exact 20 ms gap boundaries, using a clean two-sample list (front=1.0, back=2.0 exactly, no
+  // floating-point drift from repeated += as in constantRate) so the boundary comparison is exact.
+  std::vector<GyroSample> sb = {{1.0, Eigen::Vector3d(0, 1, 0)}, {2.0, Eigen::Vector3d(0, 1, 0)}};
+  EXPECT_TRUE(gyroDeltaRotation(sb, 0.98, 1.05, 0.0, R));   // front gap exactly 20 ms: still tolerated
+  EXPECT_TRUE(gyroDeltaRotation(sb, 1.9, 2.02, 0.0, R));    // back gap exactly 20 ms: still tolerated
+}
+
+TEST(GyroPrediction, NonCommutingAxesRequireCorrectCompositionOrder)
+{
+  // Two segments with non-parallel axes: rotations about different axes do not commute,
+  // so this discriminates between correct post-multiplication (R = R * Exp(w*dt), chronological
+  // order, body-frame convention) and an incorrect pre-multiplication (R = Exp(w*dt) * R).
+  const double dt1 = 0.09, dt2 = 0.09;                      // total 0.18 s, under the 0.2 s cap
+  const Eigen::Vector3d w1(5.0, 0.0, 0.0);                  // angle1 = 0.45 rad about x
+  const Eigen::Vector3d w2(0.0, 6.0, 0.0);                  // angle2 = 0.54 rad about y
+  std::vector<GyroSample> s = {{0.0, w1}, {dt1, w2}, {dt1 + dt2, Eigen::Vector3d::Zero()}};
+  Eigen::Matrix3d R;
+  ASSERT_TRUE(gyroDeltaRotation(s, 0.0, dt1 + dt2, 0.0, R));
+
+  // Hand-computed sequential product in chronological (correct) order: segment 1 applied first,
+  // then segment 2, each expressed via so3Exp (Rodrigues' formula is not what is under test here).
+  Eigen::Matrix3d expected = so3Exp(w1 * dt1) * so3Exp(w2 * dt2);
+  Eigen::Matrix3d wrongOrder = so3Exp(w2 * dt2) * so3Exp(w1 * dt1);
+  EXPECT_LT(angleBetween(R, expected), 1e-9);
+  // Sanity check that the two orders genuinely differ for this input (axes are non-parallel),
+  // i.e. that this test is actually capable of catching a swapped composition order.
+  EXPECT_GT(angleBetween(expected, wrongOrder), 1e-3);
 }
 
 TEST(GyroPrediction, ImuToCameraRotationConvention)
