@@ -49,6 +49,55 @@ class CalibCoreTest(unittest.TestCase):
         self.assertGreater(corr, 0.99)
         self.assertGreater(sharp, 0.0)
 
+    def test_time_offset_sharpness_peak_minus_far_max(self):
+        # Sharpness is defined as (correlation at the peak) - (best correlation found
+        # more than 50 ms away from the peak). Build a signal that decorrelates fast
+        # away from its true alignment (irregularly spaced narrow pulses, so there is
+        # no periodicity to create a competing correlation peak within +/-100 ms):
+        # sharpness should come out clearly large.
+        rng = np.random.default_rng(42)
+        t = np.arange(0.0, 20.0, 0.002)
+        base_centers = np.arange(0.5, 19.5, 0.37)
+        centers = base_centers + rng.normal(scale=0.05, size=len(base_centers))
+        s = np.zeros_like(t)
+        for ctr in centers:
+            s += np.exp(-0.5 * ((t - ctr) / 0.006) ** 2)
+        t_d = 0.023
+        t_cam = np.arange(0.6, 19.4, 0.004)
+        s_cam = np.interp(t_cam - t_d, t, s)
+        est, corr, sharp = c.estimate_time_offset(t_cam, s_cam, t, s, max_offset=0.1, step=0.001)
+        self.assertAlmostEqual(est, t_d, delta=0.0015)
+        self.assertGreater(corr, 0.99)
+        # Measured value ~1.06; a wrong far-set statistic (e.g. mean instead of max)
+        # or a wrong cutoff cannot fake this bound down, so it pins the "far max" half.
+        self.assertGreater(sharp, 0.5)
+
+    def test_time_offset_sharpness_respects_50ms_cutoff(self):
+        # Build a signal with a strong secondary correlation peak ~70 ms from the true
+        # peak (inside the search range but outside the 50 ms "near" band). With the
+        # correct 50 ms cutoff that secondary peak falls in the far set, so it caps the
+        # sharpness at a small value. An implementation using a wider cutoff (e.g. 100 ms)
+        # would wrongly treat 70 ms as "near" and exclude it, reporting a large sharpness
+        # instead -- so this assertion is what catches the cutoff being wrong.
+        period = 0.07  # secondary correlation peak at +/- 70 ms, within max_offset=0.1
+        t = np.arange(0.0, 20.0, 0.002)
+        s = np.zeros_like(t)
+        n_periods = int(20.0 / period)
+        for i in range(n_periods):
+            ctr = i * period + 0.01
+            s += np.exp(-0.5 * ((t - ctr) / 0.01) ** 2)
+        s *= 1.0 + 0.05 * np.sin(0.3 * t)  # break exact periodicity slightly
+        t_d = 0.023
+        t_cam = np.arange(0.6, 19.4, 0.004)
+        s_cam = np.interp(t_cam - t_d, t, s)
+        est, corr, sharp = c.estimate_time_offset(t_cam, s_cam, t, s, max_offset=0.1, step=0.001)
+        self.assertAlmostEqual(est, t_d, delta=0.0015)
+        self.assertGreater(corr, 0.99)
+        # Measured value ~5e-7 with the correct 50 ms cutoff; a wider cutoff (e.g. 100 ms)
+        # excludes the secondary peak from the far set and measures sharp ~1.0 instead,
+        # so this bound pins the "50 ms" half of the definition.
+        self.assertLess(sharp, 0.2)
+
     def test_fit_R_b_c_with_outliers(self):
         rng = np.random.default_rng(3)
         R_b_c = c.so3_exp(np.array([1.2, -0.4, 0.3]))
