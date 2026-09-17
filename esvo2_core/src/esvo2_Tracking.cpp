@@ -53,6 +53,9 @@ esvo2_Tracking::esvo2_Tracking(
   bSaveTrajectory_     = tools::param(pnh_, "SAVE_TRAJECTORY", false);
   bVisualizeTrajectory_ = tools::param(pnh_, "VISUALIZE_TRAJECTORY", true);
   bUseImu_ = tools::param(pnh_, "USE_IMU", true);
+  bImuRotationPrediction_ = tools::param(pnh_, "IMU_ROTATION_PREDICTION", false);
+  imuTimeOffset_ = tools::param(pnh_, "IMU_TIME_OFFSET", 0.0);
+  lastPredLog_ = ros::WallTime::now();
   resultPath_             = tools::param(pnh_, "PATH_TO_SAVE_TRAJECTORY", std::string());
   nh_.setParam("/ESVO2_SYSTEM_STATUS", ESVO2_System_Status_);
 
@@ -70,6 +73,13 @@ esvo2_Tracking::esvo2_Tracking(
   map_sub_ = nh_.subscribe("pointcloud", 0, &esvo2_Tracking::refMapCallback, this);// local map in the ref view.
   stampedPose_sub_ = nh_.subscribe("stamped_pose", 0, &esvo2_Tracking::stampedPoseCallback, this);// for accessing the pose of the ref view.
   imu_sub_ = nh_.subscribe("/imu/data", 0, &esvo2_Tracking::refImuCallback, this);// local map in the ref view.
+  if (bImuRotationPrediction_)
+  {
+    if (bUseImu_)
+      LOG(WARNING) << "IMU_ROTATION_PREDICTION is ignored while USE_IMU is true";
+    imu_prediction_sub_ = nh_.subscribe("imu_prediction", 2000, &esvo2_Tracking::imuPredictionCallback, this);
+    LOG(INFO) << "IMU rotation prediction enabled, IMU_TIME_OFFSET = " << imuTimeOffset_ << " s";
+  }
   V_ba_bg_sub_ = nh_.subscribe("/esvo2_mapping/V_ba_bg", 0, &esvo2_Tracking::VBaBgCallback, this);
   /*** For Visualization and Test ***/
   reprojMap_pub_left_ = it_.advertise("Reproj_Map_Left", 1);
@@ -251,6 +261,7 @@ esvo2_Tracking::curDataTransferring()
   // TS_history may not be updated before the tracking loop excutes the data transfering
   if(cur_.t_ == TS_it->first)
     return false;
+  const double t_prev_frame = cur_.t_.toSec();
   cur_.t_ = TS_it->first;
   cur_.pTsObs_ = &TS_it->second;
 
@@ -304,6 +315,8 @@ esvo2_Tracking::curDataTransferring()
 
       T_world_cur_.block(0, 0, 3, 3) =  R_w_c * R_b_c_* q.toRotationMatrix() * R_b_c_.inverse();
     } 
+    if(bImuRotationPrediction_ && !bUseImu_ && ESVO2_System_Status_ == "WORKING") // no prediction during INITIALIZATION
+      predictRotationWithGyro(t_prev_frame, cur_.t_.toSec());
     Eigen::Matrix3d R_w_c = T_world_cur_.block(0, 0, 3, 3);
     T_world_cur_.block(0, 0, 3, 3) = fixRotationMatrix(R_w_c);
     cur_.tr_ = Transformation(T_world_cur_);
@@ -674,6 +687,50 @@ Eigen::Matrix3d esvo2_Tracking::fixRotationMatrix(const Eigen::Matrix3d& R) {
     Eigen::Matrix3d U = svd.matrixU();
     Eigen::Matrix3d V = svd.matrixV();
     return U * V.transpose();
+}
+
+void esvo2_Tracking::imuPredictionCallback(const sensor_msgs::ImuConstPtr &msg)
+{
+  std::lock_guard<std::mutex> lock(gyro_mutex_);
+  const double t = msg->header.stamp.toSec();
+  if (!gyroBuf_.empty() && t <= gyroBuf_.back().t)
+    return;
+  gyroBuf_.push_back({t, Eigen::Vector3d(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z)});
+  while (!gyroBuf_.empty() && gyroBuf_.front().t < t - 2.0)
+    gyroBuf_.pop_front();
+}
+
+// Rotates T_world_cur_ (the previous frame's pose) by the gyro-integrated
+// camera rotation between the two frames. Translation is left unchanged.
+void esvo2_Tracking::predictRotationWithGyro(double t_prev_frame, double t_cur_frame)
+{
+  std::vector<tools::GyroSample> samples;
+  {
+    std::lock_guard<std::mutex> lock(gyro_mutex_);
+    samples.assign(gyroBuf_.begin(), gyroBuf_.end());
+  }
+  Eigen::Matrix3d R_imu;
+  if (tools::gyroDeltaRotation(samples, t_prev_frame, t_cur_frame, imuTimeOffset_, R_imu))
+  {
+    Eigen::Matrix3d R_c = tools::imuToCameraRotation(R_imu, R_b_c_);
+    T_world_cur_.block<3, 3>(0, 0) = T_world_cur_.block<3, 3>(0, 0) * R_c;
+    nPredOk_++;
+    predAngleSumDeg_ += Eigen::AngleAxisd(R_c).angle() * 180.0 / M_PI;
+  }
+  else
+  {
+    nPredSkip_++;
+  }
+  if ((ros::WallTime::now() - lastPredLog_).toSec() >= 5.0)
+  {
+    LOG(INFO) << "IMU rotation prediction: " << nPredOk_ << " predicted, " << nPredSkip_ << " skipped, mean "
+              << (nPredOk_ ? predAngleSumDeg_ / nPredOk_ : 0.0) << " deg/frame";
+    if (nPredSkip_ > 0 && nPredOk_ == 0)
+      LOG(WARNING) << "IMU rotation prediction: no gyro coverage (is /imu/data_synced publishing?)";
+    nPredOk_ = nPredSkip_ = 0;
+    predAngleSumDeg_ = 0.0;
+    lastPredLog_ = ros::WallTime::now();
+  }
 }
 
 }// namespace esvo2_core
