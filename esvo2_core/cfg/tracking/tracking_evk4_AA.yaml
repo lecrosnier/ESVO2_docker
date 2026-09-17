@@ -19,6 +19,6 @@ VISUALIZE_TRAJECTORY: True
 USE_IMU: False
 # Gyro rotation prediction (rotation only; translation stays vision-only).
 # Needs /imu/data_synced (imu_restamp.py) and a calibrated T_b_c rotation.
-IMU_ROTATION_PREDICTION: False
+IMU_ROTATION_PREDICTION: True
 # camera time = IMU time + IMU_TIME_OFFSET (s), from calibrate_imu_camera_rotation.py
-IMU_TIME_OFFSET: 0.0
+IMU_TIME_OFFSET: -0.005
