@@ -14,8 +14,8 @@
        below can still be run in separate terminals (see EVK4_STEREO_SETUP.md). -->
   <arg name="imu" default="true" />
   <arg name="gui" default="true" />
-  <arg name="left_serial" default="00051182" />
-  <arg name="right_serial" default="00051860" />
+  <arg name="left_serial" default="00051860" />
+  <arg name="right_serial" default="00051182" />
   <arg name="event_rate_limit" default="4000000" />
   <arg name="calibInfoDirStr" default="$(find esvo2_core)/calib/evk4_stereo" />
 
