@@ -90,8 +90,11 @@ The bias is fixed for the session once known.
 | `GYRO_BIAS_WINDOW` | `2.0` | Still-window length, s. |
 | `GYRO_STILL_MAX_STD` | `0.0035` | Stillness threshold per axis, rad/s (0.2 °/s; bag: still 0.0007, hand-held ~0.07). |
 
-With none of these keys set, behaviour is identical to round 1. No existing
-config sets them, so MVSEC/DSEC/etc. are unaffected.
+Configs without `IMU_ROTATION_PREDICTION: True` (every config except the
+EVK4 one) are unaffected: no gyro subscription, no estimation, no lock. With
+prediction on and none of these keys set, the only change from round 1 is
+that the prediction becomes bias-corrected once a still window has been seen;
+the lock stays off.
 
 ### Per-frame flow (`esvo2_Tracking`)
 
@@ -145,7 +148,7 @@ bag's still period (10.5–23 s): `[0.003425, -0.004210, -0.003853]` rad/s.
 | # | Setup | Pass |
 |---|---|---|
 | G1 | `IMU_ROTATION_LOCK: True` + `GYRO_BIAS` | x ≤ −0.50 m; tracked yaw within ±3° of gyro-integrated (bias-corrected) yaw throughout |
-| G2 | new keys unset | x between −0.15 and −0.30 m (current baseline −0.20 to −0.26 m) |
+| G2 | new keys unset (the bag's first still window comes after the slide, so the slide is predicted uncorrected, as in round 1) | x between −0.15 and −0.30 m (current baseline −0.20 to −0.26 m) |
 | G3 | MVSEC `indoor_flying1`, vision-only upenn configs, new keys unset | path ratio ≥ 0.8, 0 tracking resets, on each of 2 runs |
 | G4 | startup estimation (no `GYRO_BIAS`), bag trimmed to start at 10.5 s | estimated bias within 0.001 rad/s of the configured value per axis |
 
