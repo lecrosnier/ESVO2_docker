@@ -73,6 +73,7 @@
     <remap from="stamped_pose" to="/esvo2_tracking/pose_pub" />
     <remap from="events_left" to="/evk4_left/events" />
     <remap from="pointcloud" to="/esvo2_mapping/pointcloud_local2" />
+    <remap from="imu_prediction" to="/imu/data_synced" />
     <rosparam param="dvs_frame_id">"dvs"</rosparam>
     <rosparam param="world_frame_id">"map"</rosparam>
     <rosparam param="calibInfoDir" subst_value="true">$(arg calibInfoDirStr)</rosparam>

@@ -35,6 +35,7 @@
 #include <pcl_ros/point_cloud.h>
 
 #include <esvo2_core/factor/imu_integration.h>
+#include <esvo2_core/tools/gyro_prediction.h>
 #include <events_repacking_tool/V_ba_bg.h>
 
 namespace esvo2_core
@@ -62,6 +63,8 @@ namespace esvo2_core
     // topic callback functions
     void refMapCallback(const sensor_msgs::PointCloud2::ConstPtr &msg);
     void refImuCallback(const sensor_msgs::ImuPtr &msg);
+    void imuPredictionCallback(const sensor_msgs::ImuConstPtr &msg);
+    void predictRotationWithGyro(double t_prev_frame, double t_cur_frame);
     void VBaBgCallback(const events_repacking_tool::V_ba_bg &msg);
     void groundTruthCallback(const geometry_msgs::PoseStampedConstPtr &msg);
     void timeSurface_NegaTS_Callback(
@@ -96,6 +99,7 @@ namespace esvo2_core
     ros::Subscriber map_sub_, map_sub_for_tracking_visualization_;
     ros::Subscriber V_ba_bg_sub_;
     ros::Subscriber imu_sub_;
+    ros::Subscriber imu_prediction_sub_;
     ros::Subscriber gt_sub_;
 
     message_filters::Subscriber<sensor_msgs::Image> TS_left_sub_, TS_right_sub_;
@@ -152,6 +156,15 @@ namespace esvo2_core
     bool bSaveTrajectory_;
     bool bVisualizeTrajectory_;
     bool bUseImu_;
+    // gyro rotation prediction (IMU_ROTATION_PREDICTION)
+    bool bImuRotationPrediction_;
+    double imuTimeOffset_; // camera time = IMU time + imuTimeOffset_
+    std::mutex gyro_mutex_;
+    std::deque<tools::GyroSample> gyroBuf_;
+    size_t nPredOk_ = 0, nPredSkip_ = 0;
+    double predAngleSumDeg_ = 0.0;
+    ros::WallTime lastPredLog_;
+    bool bGyroJumpWarned_ = false; // re-arms once a sample is accepted normally again
     std::string resultPath_;
 
     Eigen::Matrix<double, 4, 4> T_world_ref_;

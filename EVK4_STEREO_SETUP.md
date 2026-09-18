@@ -6,12 +6,17 @@ repo only ships launch files for offline rosbags (DSEC/RPG) and a live
 DVXplorer rig.
 
 **Current status:** the full pipeline launches and runs (cameras, IMU,
-time surfaces, mapping, tracking, visualization), and the crashes and
-memory leaks found so far are fixed. Pose estimation does **not** work
+time surfaces, mapping, tracking, visualization); the crashes, black-outs
+and memory leaks found along the way (hot pixels, the event-rate cap, the
+time-surface lock fix) are fixed. Pose estimation does **not** work
 reliably yet: stereo (SGM) initialization does succeed, but the local map
 then collapses below the 300 points tracking needs, so the system keeps
-resetting. IMU fusion is disabled because it diverged. See "Known
-limitations".
+resetting. Gyro rotation prediction is calibrated and **enabled**
+(`IMU_ROTATION_PREDICTION: True`): tracking's rotation follows the gyro at
+ratios 1.00-1.04 across every speed band with real motion (was 0.04-0.45
+with it off). Translation is still vision-only, ESVO2's own IMU fusion
+path (`USE_IMU`) remains off, and the pose still drifts when the rig is
+nearly stationary. See "Known limitations".
 
 ## Hardware
 
@@ -69,14 +74,14 @@ lens change), the working method was:
    and about `T_right_left`'s direction convention: `X_right = R·X_left + t`
    (see `RegProblemLM.cpp`'s comment on this).
 
-### IMU-to-camera extrinsics: not done yet
+### IMU-to-camera extrinsics: rotation calibrated, lever arm not
 
-`T_b_c` in both calib YAMLs is still the identity placeholder inherited
-from the DVXplorer example. It is **not** an actual calibration: no
-rotation alignment or lever-arm offset has been measured. With IMU fusion
-enabled this produced runaway pose drift (see "Known limitations"). A real
-IMU-camera extrinsic calibration (e.g. Kalibr) is needed before re-enabling
-`USE_IMU`.
+`T_b_c`'s rotation in both calib YAMLs was measured with
+`esvo2_core/scripts/calibrate_imu_camera_rotation.py` (see "Changes made"
+for the method and measured values); translation is still 0 (lever arm not
+calibrated — the cameras and IMU are close together on this rig, so this
+was judged lower priority than the rotation, which previously caused
+runaway pose drift when IMU fusion was enabled, see "Known limitations").
 
 ## Changes made
 
@@ -146,13 +151,25 @@ the same paths in the `sbg_ros_driver` clone.
   adapter came back as `ttyUSB1` instead of `ttyUSB0` after a replug).
 - **New:** `launch/sbg_evk4_rig.launch`: loads that config and starts
   `sbg_device`.
+- **Device settings changed on the unit itself (not in any file):** the
+  `IMU_DATA` (msg 3) and `EKF_QUAT` (msg 7) outputs on port A were raised
+  from 25 Hz (mode 8) to 200 Hz (mode 1) and saved to the Ellipse2-N's
+  flash, using a one-off program built against the driver's bundled
+  sbgECom (`sbgEComCmdOutputGetConf` to read, `sbgEComCmdOutputSetConf`,
+  read-back, then `sbgEComCmdSettingsAction(SBG_ECOM_SAVE_SETTINGS)`).
+  Nothing else on the unit was touched. The program lived in a scratch
+  directory and was not kept. `log_imu_data: 1` / `log_ekf_quat: 1` in the
+  YAML only record this (see "Gotchas": the driver doesn't apply them).
+  Measured afterwards: `/sbg/imu_data` 201.5 Hz, `/sbg/ekf_quat` 200.0 Hz,
+  `/imu/data` 200.0 Hz, gravity 9.824 m/s² at rest.
 - No source code in this package was modified; its fixed-point scaling bug
   (see "Gotchas") is worked around via config.
 
 ### This repo (`ESVO2`)
 
 - **New:** `esvo2_core/calib/evk4_stereo/{left,right}.yaml`: the stereo
-  calibration described above. `T_b_c` is still an identity placeholder.
+  calibration described above. `T_b_c`'s rotation is now calibrated (see
+  below); translation is still 0.
 - **New:** `esvo2_core/cfg/mapping/mapping_evk4_AA_mapping.yaml`: copy of
   `mapping_dvx_AA_mapping.yaml` with:
   - `USE_IMU: False` (see "Known limitations")
@@ -190,6 +207,62 @@ the same paths in the `sbg_ros_driver` clone.
     `vBatch_`. `AA_thread()` reads `vBatch_` too. Same events, same
     images.
 - **New:** `dependencies.yaml` entry for `sbg_ros_driver`.
+- **New:** `esvo2_core/scripts/imu_restamp.py` (+ `imu_restamp_core.py`,
+  unit tests in `esvo2_core/test/`): re-stamps `/sbg/imu_data` with the
+  IMU's own clock, offset = min over 2 s of (receive − device time), and
+  publishes `/imu/data_synced`. Started by `evk4_live_all.launch` with
+  `imu:=true`. Measured over a 3-minute live check with the rig still:
+  36022 published for 36022 input, stamp gaps median 5.000 ms (min 4.818,
+  max 5.142 ms; 11 of 36021 gaps outside ±0.1 ms of 5 ms), receive − stamp
+  7.95 / 7.70 / 7.52 ms across the three minutes (stable, always ≥ 0), no
+  warnings.
+- **New:** `esvo2_core/scripts/calibrate_imu_camera_rotation.py`
+  (+ `imu_cam_calib_core.py`, unit tests): estimates `R_b_c` (rectified left
+  camera → IMU, `p_imu = R_b_c · p_cam`) and `t_d` (camera time = IMU time +
+  `t_d`) by aligning event-based camera angular velocity with the gyro.
+  Procedure: camera driver + SBG driver + relay only; rig rotated by hand
+  about all axes in front of a ≥3 m textured scene for 60 s, `_window:=0.02`.
+  Two independent 60 s captures were run: run 1 gave `t_d = -0.005 s`, peak
+  correlation 0.988, sharpness 0.070, 94% inliers, halves differ by 0.94° /
+  4.0 ms, 4.11° from the nearest axis permutation, from 2065 camera samples
+  and 1720 moving pairs (rms 0.054 rad/s); run 2 gave `t_d = -0.006 s`,
+  correlation 0.985, sharpness 0.065, 93% inliers, halves differ by 0.38° /
+  2.0 ms, 4.33° from the nearest permutation. The two runs agree to 0.29°
+  and 1.0 ms. Run 1's rotation was written into `T_b_c` in both calib files
+  (translation still 0): camera x ≈ −IMU y, camera y ≈ −IMU z (camera y
+  points down, IMU z points up), camera z ≈ +IMU x, with the ~4.2° residual
+  from the rig's real mounting tilt (not calibration error). At the 20 ms
+  window, 710 of ~2775 frame pairs (26%) were dropped under real hand
+  motion (0 dropped with the rig still); a 10 ms window dropped 359 of
+  ~1230 (29%) and is not used.
+- **New:** gyro rotation prediction in tracking
+  (`esvo2_core/include/esvo2_core/tools/gyro_prediction.h`, gtest
+  `test_gyro_prediction`, run with
+  `cd /root/catkin_ws/build && make run_tests_esvo2_core_gtest_test_gyro_prediction`
+  — `catkin_make --pkg esvo2_core run_tests_...` no-ops in this workspace).
+  Params in `tracking_evk4_AA.yaml`: `IMU_ROTATION_PREDICTION: True` and
+  `IMU_TIME_OFFSET: -0.005`; tracking topic `imu_prediction` remapped to
+  `/imu/data_synced`. Each frame starts from
+  `R_world_prev · R_b_cᵀ · R_imu · R_b_c`, translation still from vision;
+  ESVO2's original `USE_IMU` path stays off. Validation
+  (`esvo2_core/scripts/validate_rotation_tracking.py`), prediction OFF vs
+  ON:
+  - Slow-turn holds, coverage = pose / gyro, error = |coverage − 100%|:
+    prediction OFF, gyro 71.3° / 71.0° vs pose 11.3° / 11.8° — coverage
+    16% / 17% (84% / 83% error); prediction ON, gyro 77.4° / 77.8° vs
+    pose 84.1° / 84.6° — coverage 109% / 109% (9% error each); one later
+    ON hold, gyro 73.3° vs pose 89.5° — coverage 122% (22% error, see
+    "Known limitations").
+  - Mixed motion, pose/gyro rotation-speed ratio by gyro band (OFF → ON):
+    0.0–0.1 rad/s 2.06 → 1.56; 0.1–0.5 0.45 → 1.04; 0.5–1.2 0.12 → 1.01;
+    >1.2 0.04 → 1.00.
+  - Share of map points in the darkest 5% of the negative time surface:
+    7.1% → 13.3% on the slow turn (10.5% on the mixed run); mean valid
+    residual 235 → 229; rot_update 0.161° → 0.138° per solve; cur_vs_ref
+    0.23° → 0.44°.
+  - Prediction activity: 125–126 predictions per 5 s, 0 skipped, no
+    skip-rate warnings; 0 re-inits (baseline 2) and 0 node deaths over the
+    run; mapping ~307% CPU / 5.0 GB, tracking ~87% / 3.0 GB, ~2.3 GB free.
 
 > **Local debug edits (not part of this work):** someone's in-progress
 > debug edits to `image_representation/src/ImageRepresentation.cpp`
@@ -295,6 +368,26 @@ the same paths in the `sbg_ros_driver` clone.
   scales. `linear_acceleration.z` read ≈10<sup>7</sup> instead of ≈9.8.
   Worked around with `log_imu_short: 0`, which falls back to the
   float-typed `SbgImuData` log.
+- **The SBG YAML's output rates are not applied to the device.** With
+  `confWithRos: false` the driver only reads; the unit keeps the output
+  modes stored in its flash, so editing `log_imu_data` alone changed
+  nothing (still 25 Hz). `confWithRos: true` would apply them, but it also
+  writes every other YAML group to the unit (motion profile, alignment,
+  lever arms, magnetometer, GNSS, odometer) and saves, overwriting its
+  current settings with mostly stock defaults, so the rates were set
+  directly instead (see "Changes made").
+- **`/imu/data` only publishes when an IMU sample and an EKF quaternion
+  have the same timestamp** (`MessagePublisher::processRosImuMessage()`).
+  With `IMU_DATA` at 200 Hz but `EKF_QUAT` at 25 Hz, `/sbg/imu_data` ran at
+  200 Hz while `/imu/data` stayed at 25 Hz. Keep both outputs at the same
+  rate. ESVO2 only reads `linear_acceleration`, `angular_velocity` and the
+  header stamp from it, not the orientation.
+- **`/imu/data` timestamps are bunched.** `time_reference: "ros"` stamps
+  each message when the serial read returns, and the link delivers
+  samples in batches: 65% of consecutive `header.stamp` gaps were under
+  1 ms (median 0.04 ms, p90 15 ms, max 20 ms), while the IMU's own clock
+  (`/sbg/imu_data` `time_stamp`) showed exactly 5.00 ms every time. Fine
+  for display, not for preintegration (see "Known limitations").
 - **`bVisualizeGlobalPC: True` grows memory without bound.**
   `esvo2_Mapping.cpp` reserves `pc_global_` for 5M points and only ever
   appends to it, re-serializing and re-publishing it to rviz on every
@@ -349,6 +442,16 @@ the same paths in the `sbg_ros_driver` clone.
 - **roslaunch rejects `--` inside XML comments** (`not well-formed
   (invalid token)`), and a Python `xml.etree` well-formedness check does
   not catch it. Validate launch files with `roslaunch --nodes <pkg> <file>`.
+- **`python3 -m unittest test/...` fails with `ModuleNotFoundError`** for
+  this repo's Python unit tests: Python resolves `test.` against its own
+  stdlib `test` package, not this repo's `test/` directory. Run the file
+  directly instead: `python3 test/<file>.py -v`.
+- **`catkin_make --pkg esvo2_core run_tests_esvo2_core_gtest_...` no-ops**
+  in this workspace (returns success without running anything). Build and
+  run the gtest binary directly:
+  `cd /root/catkin_ws/build && make run_tests_esvo2_core_gtest_test_gyro_prediction`.
+  `catkin_test_results` then double-counts results (it reported 10 for 6
+  actual tests); read the gtest binary's own output instead.
 
 ## Known limitations / next steps
 
@@ -371,10 +474,43 @@ the same paths in the `sbg_ros_driver` clone.
   `maxNumFusionFrames: 5` (the cfg notes the original ESVO value was 40),
   patch sizes 15x7 / 5x31, and `BM_ZNCC_Threshold: 0.2`. Rectification
   also hasn't been visually verified.
-- **IMU fusion is disabled** (`USE_IMU: False` in both cfgs). With it
-  enabled and `T_b_c` at identity, tracking did produce poses but they
-  diverged to hundreds of meters within seconds of hand-held motion.
-  Needs a real IMU-camera extrinsic calibration first.
+- **Gyro rotation prediction overshoots real rotation when the rig is
+  nearly stationary.** In the mixed-motion validation, the pose/gyro
+  rotation-speed ratio with prediction on is 1.00–1.04 in every band where
+  the rig is actually moving (>0.1 rad/s), but 1.56 in the 0.0–0.1 rad/s
+  band, where real motion (~0.05 rad/s) sits below the pre-existing
+  ~0.08 rad/s pose noise floor — the predictor amplifies that noise rather
+  than tracking real rotation. This accumulated stationary drift is what
+  pushed one slow-turn hold (prediction ON) to 22% error, above the plan's
+  20% criterion; the other two evaluated ON holds were 9% each (a further
+  near-still hold was excluded by the validation script's <5° rule).
+  This is a known limitation, not a pass: it is not fixed by better
+  calibration, only by a motion/stillness gate on the predictor.
+- **IMU fusion is disabled** (`USE_IMU: False` in both cfgs). Gyro-based
+  rotation prediction is on in tracking (see "Changes made"), but
+  translation still comes only from vision, mapping's IMU backend
+  (`BackendOptimization.cpp`) stays off, and gyro bias is not estimated
+  (the predictor uses raw gyro readings). With `USE_IMU: True` and `T_b_c`
+  at identity, tracking previously produced poses that diverged to hundreds
+  of meters within seconds of hand-held motion; with it disabled, mapping
+  doesn't subscribe to `/imu/data` but still calls `getIMUInterval()` every
+  cycle, which is where the repeated `not receive imu data` error comes
+  from (harmless). Before re-enabling `USE_IMU`:
+  - **Lever arm not calibrated.** `T_b_c`'s rotation is now measured (see
+    "Changes made"), but its translation is still 0.
+  - **Extrinsic convention mismatch.** This calibration measured `R_b_c`
+    under `p_imu = R_b_c * p_cam`, and the rotation predictor applies it as
+    `R_b_c^T * R_imu * R_b_c`. ESVO2's own IMU fusion path composes the
+    extrinsic the other way round, as `R_b_c * q * R_b_c^T` — the opposite
+    convention. Enabling `USE_IMU` on the strength of "the rotation is now
+    calibrated" would apply it backwards; the extrinsic must be re-derived
+    (or transposed and verified) for the fusion path before relying on it.
+  - **IMU sample period:** `esvo2_Tracking::refImuCallback()` uses the real
+    stamp difference; only the very first sample gets `0.001` s. (An earlier
+    version of this note wrongly said it assumed 1000 Hz.) With the bunched
+    `/imu/data` stamps those differences were wrong per sample; the rotation
+    predictor uses `/imu/data_synced` instead.
+  - Rate is done: `/imu/data` now runs at 200 Hz (was 25 Hz).
 - **`esvo2_Mapping` and `esvo2_Tracking` use a lot of memory, but it's
   bounded, not a leak.** Each keeps a history of `TS_HISTORY_LENGTH` (100)
   time-surface observations, and each observation stores 6–10
@@ -458,8 +594,16 @@ rostopic echo -n 1 /imu/data
 The magnitude of `linear_acceleration` should be close to 9.8 (gravity)
 when the rig is still. If `/imu/data` never appears, or you see
 `SBG_TIME_OUT` in this terminal, re-check the baud rate (see "Gotchas").
-The IMU isn't currently used by mapping/tracking (`USE_IMU: False`), but
-running it keeps `/imu/data` available.
+Mapping never uses the IMU. Tracking has two separate IMU flags: its own
+fusion path (`USE_IMU`) is off, but gyro rotation prediction
+(`IMU_ROTATION_PREDICTION: True`, see "Changes made") is on and needs
+`/imu/data_synced`, published by `imu_restamp.py` — not started by this
+three-terminal flow (it's started by `evk4_live_all.launch`'s `imu:=true`,
+or run it manually with `rosrun esvo2_core imu_restamp.py`). Without that
+topic, prediction is inactive in this manual flow: tracking still runs but
+with no rotation prior, and logs a skip-rate warning every 5 s. Running
+this terminal at least keeps `/imu/data` available for the sanity check
+above.
 
 **Terminal 3: mapping, tracking, and visualization:**
 
