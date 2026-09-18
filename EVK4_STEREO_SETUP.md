@@ -22,8 +22,11 @@ nearly stationary. See "Known limitations".
 
 - 2x Prophesee EVK4, IMX636 sensor, 1280x720
 - Serials:
-  - `00051182`: physically **left** camera, sync slave (cabled SYNC IN)
-  - `00051860`: physically **right** camera, sync master (cabled SYNC OUT)
+  - `00051860`: physically **left** camera, sync master (cabled SYNC OUT)
+  - `00051182`: physically **right** camera, sync slave (cabled SYNC IN)
+  - "Left" means seen from behind the rig, facing where it looks. Until
+    2026-09-18 these were swapped (see "Gotchas": "The camera sides were
+    swapped")
 - Hardware sync cable between the two (required, see "Gotchas")
 - SBG Systems IMU (red unit, `MAIN`/`ANT` connectors), mounted centered
   between the two cameras on the rig, connected via USB (shows up as
@@ -275,6 +278,33 @@ the same paths in the `sbg_ros_driver` clone.
 > also has local edits; it was left untouched.
 
 ## Gotchas discovered along the way
+
+- **The camera sides were swapped (fixed 2026-09-18).** `stereo.launch`
+  published serial `00051182` as left, but covering each lens showed it is
+  physically on the right (covering the physically left lens silenced
+  `/evk4_right/events`: 71k events in 5 s vs ~850k normally). The
+  calibration had captured the real geometry, so `T_right_left` came out
+  with t_x = +0.156 m and `P_right[0,3]` = +263 (every other dataset in
+  `calib/` has both negative). ESVO2 takes the baseline as a length
+  (`CameraSystem::computeBaseline()` uses `.norm()`), assumes
+  `x_right = x_left - disparity`, and only searches positive disparities,
+  so almost no stereo match survived. That left the inverse depth map and
+  the left reprojected map nearly empty, and the local map collapsed.
+  Fix: serials swapped in `stereo.launch` and `evk4_live_all.launch`, the
+  hot-pixel masks moved with their sensors, and both calib YAMLs
+  regenerated: intrinsics swapped between files, `T_right_left` inverted,
+  rectification redone with the settings that reproduce the old files
+  exactly (`cv2.stereoRectify`, `CALIB_ZERO_DISPARITY`, `alpha=0`).
+  `T_b_c` is unchanged: the rectified frame's orientation is identical
+  (0.000 deg difference). Sanity check for any future calibration:
+  `P_right[0,3]` must be negative. Result, live and vision-only (IMU
+  driver off): rectified events now match at positive disparity (+68 to
+  +78 px, NCC up to 0.69); SGM init returned 670 to 905 points (before:
+  mean 28 to 231 over 11 runs); in a 30 s hand-held run the local map held
+  1,900 to 5,100 points, tracking ran at 20 to 22 poses/s, and there was
+  no reset for 2.5+ min. Pose accuracy/drift not yet measured. Notes below written before this fix
+  that say "left"/"right" mean the old topics: old left = `00051182`, old
+  right = `00051860`.
 
 - **USB2 vs USB3**: both EVK4s must be on genuine USB3 SuperSpeed ports.
   On USB2 the event rate overruns the link and the driver crashes with
