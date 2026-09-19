@@ -547,7 +547,10 @@ the same paths in the `sbg_ros_driver` clone.
   0.76, 0.81, 0.82) with tracking resets 32, 0, 31, 0, 0 — 2 of the 5 runs
   reset repeatedly and landed at the low end of the ratio range, the other
   3 didn't reset at all. ESVO2 is non-deterministic run to run even with a
-  fixed bag, rate and config.
+  fixed bag, rate and config: an A/B check against the pre-branch build
+  (5 runs each side) put both builds in the same range, ratio 0.76–1.13,
+  with 1–2 of 5 runs on either build hitting a burst of ~24–32 tracking
+  re-initializations — this predates the gyro-lock work.
 - **`rosparam load` doesn't clear keys missing from the new file.** Because a
   `roscore` stays up across separate `roslaunch` invocations (e.g. between
   replay runs), a key set by one config (say `IMU_ROTATION_LOCK: True` from a
