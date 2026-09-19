@@ -541,12 +541,13 @@ the same paths in the `sbg_ros_driver` clone.
 - **ESVO2's IMU mode (`USE_IMU: True`) is broken on this machine, upstream
   included:** on MVSEC `indoor_flying1` mapping prints an accelerometer bias of
   ~6.9e-310 (uninitialized memory) and crashes (`std::length_error`). Vision-
-  only mode tracks MVSEC, but not deterministically: two back-to-back runs
-  of the identical unchanged config (`USE_IMU: False`, no `IMU_ROTATION_*`/
-  `GYRO_BIAS*` keys involved) gave path-length ratio 0.85 with 32 tracking
-  resets vs 0.95 with 0 resets. Path ratio observed 0.85–0.95 across runs;
-  ESVO2 is non-deterministic run to run even with a fixed bag, rate and
-  config.
+  only mode tracks MVSEC, but not deterministically: 5 back-to-back runs of
+  the identical unchanged config (`USE_IMU: False`, no `IMU_ROTATION_*`/
+  `GYRO_BIAS*` keys involved) gave path-length ratio 0.76–0.95 (0.85, 0.95,
+  0.76, 0.81, 0.82) with tracking resets 32, 0, 31, 0, 0 — 2 of the 5 runs
+  reset repeatedly and landed at the low end of the ratio range, the other
+  3 didn't reset at all. ESVO2 is non-deterministic run to run even with a
+  fixed bag, rate and config.
 - **`rosparam load` doesn't clear keys missing from the new file.** Because a
   `roscore` stays up across separate `roslaunch` invocations (e.g. between
   replay runs), a key set by one config (say `IMU_ROTATION_LOCK: True` from a
