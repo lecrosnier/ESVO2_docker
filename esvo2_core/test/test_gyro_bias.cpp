@@ -75,6 +75,20 @@ TEST(GyroBias, IgnoresSamplesAfterAcceptance)
   EXPECT_LT((e.bias() - kBias).norm(), 1e-5);
 }
 
+TEST(GyroBias, SteadyRotationRejected)
+{
+  GyroBiasEstimator e(2.0, 0.0035);
+  // Steady slow rotation: same small alternating noise as stillRate, but with a
+  // non-zero mean on the x axis (0.05 rad/s) that variance alone would not catch.
+  feed(e, 0.0, 2.0, 0.005, [](double t) -> Eigen::Vector3d { return stillRate(t) + Eigen::Vector3d(0.05, 0, 0); });
+  EXPECT_FALSE(e.hasBias());
+  const double at = feed(e, 2.005, 4.5, 0.005, stillRate);
+  ASSERT_TRUE(e.hasBias());
+  EXPECT_GT(at, 4.0);
+  EXPECT_LT(at, 4.03);
+  EXPECT_LT((e.bias() - kBias).norm(), 2e-5);
+}
+
 TEST(GyroBias, SubtractedBiasLeavesTrueRotation)
 {
   const Eigen::Vector3d w(0.1, -0.4, 0.2);

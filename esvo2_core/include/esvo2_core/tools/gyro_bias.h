@@ -12,15 +12,17 @@ namespace tools
 // Estimates a constant gyro bias from the first window in which the rig is still.
 // Samples are grouped into consecutive, non-overlapping windows of window_s seconds
 // (a window closes on the first sample at least window_s after its first sample).
-// A window is accepted when every axis' standard deviation is below max_std and no two
-// consecutive samples in it are more than max_gap apart. The first accepted window's mean
-// is the bias; samples after that are ignored. A rejected window is discarded and the next
-// one starts at the next sample.
+// A window is accepted when every axis' standard deviation is below max_std, every axis'
+// mean is below max_abs_mean in magnitude (rejects steady slow rotation, which variance
+// alone would not catch: e.g. a 2 s window of constant 0.02+ rad/s turn has near-zero
+// std but is not the rig being still), and no two consecutive samples in it are more than
+// max_gap apart. The first accepted window's mean is the bias; samples after that are
+// ignored. A rejected window is discarded and the next one starts at the next sample.
 class GyroBiasEstimator
 {
 public:
-  GyroBiasEstimator(double window_s, double max_std, double max_gap = 0.02)
-    : window_s_(window_s), max_std_(max_std), max_gap_(max_gap)
+  GyroBiasEstimator(double window_s, double max_std, double max_gap = 0.02, double max_abs_mean = 0.02)
+    : window_s_(window_s), max_std_(max_std), max_gap_(max_gap), max_abs_mean_(max_abs_mean)
   {
     resetWindow();
   }
@@ -44,7 +46,7 @@ public:
     const Eigen::Vector3d mean = sum_ / static_cast<double>(n_);
     const Eigen::Vector3d var = (sum_sq_ / static_cast<double>(n_) - mean.cwiseProduct(mean)).cwiseMax(0.0);
     const Eigen::Vector3d sd = var.cwiseSqrt();
-    const bool still = !gap_ && n_ >= 2 && sd.maxCoeff() < max_std_;
+    const bool still = !gap_ && n_ >= 2 && sd.maxCoeff() < max_std_ && mean.cwiseAbs().maxCoeff() < max_abs_mean_;
     if (still)
     {
       bias_ = mean;
@@ -69,7 +71,7 @@ private:
     gap_ = false;
   }
 
-  double window_s_, max_std_, max_gap_;
+  double window_s_, max_std_, max_gap_, max_abs_mean_;
   Eigen::Vector3d sum_, sum_sq_;
   size_t n_ = 0;
   double t_start_ = 0.0, t_last_ = 0.0;
