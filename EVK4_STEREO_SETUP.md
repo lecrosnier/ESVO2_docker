@@ -23,7 +23,7 @@ translation-only registration; see "Changes made"), now **enabled** in
 `tracking_evk4_AA.yaml`. Measured offline on that same 1 m slide, replayed
 at 0.25x: min_x went from -0.262 m (without the lock) to -0.527 m (with
 it), and max yaw deviation from the gyro from 13.6° to 0.21°. The rest of
-the shortfall (0.53 of the 1 m slide) is attributed to event-rate
+the shortfall (0.47 of the 1 m slide) is attributed to event-rate
 saturation on this scene (the left camera sat at 3.6-3.95M ev/s through
 the whole slide, against the 4M ev/s cap), not yet fixed. Translation
 itself is still vision-only — the lock only replaces the *rotation*
@@ -541,16 +541,30 @@ the same paths in the `sbg_ros_driver` clone.
 - **ESVO2's IMU mode (`USE_IMU: True`) is broken on this machine, upstream
   included:** on MVSEC `indoor_flying1` mapping prints an accelerometer bias of
   ~6.9e-310 (uninitialized memory) and crashes (`std::length_error`). Vision-
-  only mode tracks MVSEC (path ratio 0.88–0.92).
+  only mode tracks MVSEC, but not deterministically: two back-to-back runs
+  of the identical unchanged config (`USE_IMU: False`, no `IMU_ROTATION_*`/
+  `GYRO_BIAS*` keys involved) gave path-length ratio 0.85 with 32 tracking
+  resets vs 0.95 with 0 resets. Path ratio observed 0.85–0.95 across runs;
+  ESVO2 is non-deterministic run to run even with a fixed bag, rate and
+  config.
 - **`rosparam load` doesn't clear keys missing from the new file.** Because a
   `roscore` stays up across separate `roslaunch` invocations (e.g. between
   replay runs), a key set by one config (say `IMU_ROTATION_LOCK: True` from a
   gyro-lock run) stays on the parameter server even after launching a config
   that omits it, silently changing the next run's behavior. Symptom: a replay
   meant to test the "keys removed" / default path instead reproduces the
-  locked results almost exactly. Clear stale keys first, e.g.
-  `rosparam delete /esvo2_Tracking/IMU_ROTATION_LOCK`, or restart `roscore`
-  between configs that add/remove keys.
+  locked results almost exactly. `scripts/replay_eval.sh` now deletes the
+  `/esvo2_Mapping`, `/esvo2_Tracking`, `/image_representation_left` and
+  `/image_representation_right` parameter namespaces before every run it
+  launches, so this only bites a manual `roslaunch` on a long-lived
+  `roscore` — clear those same namespaces first (e.g.
+  `rosparam delete /esvo2_Tracking`) or restart `roscore` between configs
+  that add/remove keys.
+- **Every replay ends with `terminate called without an active exception`
+  or `std::length_error` / `vector::_M_range_insert`** when the nodes are
+  killed on `SIGINT` at the end of a replay (seen in every log this branch
+  produced, including the pre-existing baseline). Results recorded before
+  shutdown are unaffected; not investigated.
 
 ## Known limitations / next steps
 
