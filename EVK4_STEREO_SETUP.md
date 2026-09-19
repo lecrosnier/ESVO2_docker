@@ -8,15 +8,27 @@ DVXplorer rig.
 **Current status:** the full pipeline launches and runs (cameras, IMU,
 time surfaces, mapping, tracking, visualization); the crashes, black-outs
 and memory leaks found along the way (hot pixels, the event-rate cap, the
-time-surface lock fix) are fixed. Pose estimation does **not** work
-reliably yet: stereo (SGM) initialization does succeed, but the local map
-then collapses below the 300 points tracking needs, so the system keeps
-resetting. Gyro rotation prediction is calibrated and **enabled**
-(`IMU_ROTATION_PREDICTION: True`): tracking's rotation follows the gyro at
-ratios 1.00-1.04 across every speed band with real motion (was 0.04-0.45
-with it off). Translation is still vision-only, ESVO2's own IMU fusion
-path (`USE_IMU`) remains off, and the pose still drifts when the rig is
-nearly stationary. See "Known limitations".
+time-surface lock fix) are fixed, and so is the left/right camera swap
+(see "Gotchas": "The camera sides were swapped"). Gyro rotation
+prediction is calibrated and **enabled** (`IMU_ROTATION_PREDICTION:
+True`): tracking's rotation follows the gyro at ratios 1.00-1.04 across
+every speed band with real motion (was 0.04-0.45 with it off). Beside a
+flat wall, though, tracking traded sideways translation for yaw the rig
+never made: at one depth, with mostly vertical edges and this rig's
+narrow 41° horizontal FOV, a lateral slide and a yaw look almost the same
+in the image, so the solver explained a recorded 1 m slide as 10-24° of
+yaw (bias-corrected gyro: -0.4°) and only 0.2-0.26 m of translation. Fixed
+by `IMU_ROTATION_LOCK` (rotation from the bias-corrected gyro,
+translation-only registration; see "Changes made"), now **enabled** in
+`tracking_evk4_AA.yaml`. Measured offline on that same 1 m slide, replayed
+at 0.25x: min_x went from -0.262 m (without the lock) to -0.527 m (with
+it), and max yaw deviation from the gyro from 13.6° to 0.21°. The rest of
+the shortfall (0.53 of the 1 m slide) is attributed to event-rate
+saturation on this scene (the left camera sat at 3.6-3.95M ev/s through
+the whole slide, against the 4M ev/s cap), not yet fixed. Translation
+itself is still vision-only — the lock only replaces the *rotation*
+estimate — and ESVO2's own IMU fusion path (`USE_IMU`) remains off. See
+"Known limitations".
 
 ## Hardware
 
@@ -266,6 +278,31 @@ the same paths in the `sbg_ros_driver` clone.
   - Prediction activity: 125–126 predictions per 5 s, 0 skipped, no
     skip-rate warnings; 0 re-inits (baseline 2) and 0 node deaths over the
     run; mapping ~307% CPU / 5.0 GB, tracking ~87% / 3.0 GB, ~2.3 GB free.
+- **New:** gyro bias estimation and rotation-lock, translation-only
+  registration in tracking
+  (`esvo2_core/include/esvo2_core/tools/gyro_bias.h`, gtest
+  `test_gyro_bias`, run the same way as `test_gyro_prediction` above). New
+  `tracking_evk4_AA.yaml` keys: `IMU_ROTATION_LOCK` (rotation comes from the
+  bias-corrected gyro, and registration only solves for translation),
+  `GYRO_BIAS` (skip estimation, use this constant bias instead — needed for
+  replays that don't start still), `GYRO_BIAS_WINDOW` (seconds of stillness
+  needed to accept a bias estimate) and `GYRO_STILL_MAX_STD` (per-axis
+  std-dev threshold, rad/s, for a window to count as "still"). Enabled in
+  the EVK4 tracking cfg; see "Current status" and "Gotchas" for the
+  measured effect.
+- **New:** replay/evaluation tooling for regression-testing tracking
+  against recorded bags instead of the live rig:
+  `esvo2_core/scripts/replay_eval.sh` (plays a bag through a launch file,
+  records `/esvo2_tracking/pose_pub`, reports SGM init and tracking reset
+  counts), `esvo2_core/scripts/eval_slide.py` (checks a recorded lateral
+  slide: tracked x displacement and yaw deviation from the gyro) and
+  `esvo2_core/scripts/eval_traj.py` (compares a tracked trajectory against
+  a ground-truth file, e.g. MVSEC, reporting path-length ratio and ATE).
+  `system_evk4_mapping.launch` gained matching args: `use_sim_time` (true
+  for bag replay), `mapping_cfg` / `tracking_cfg` (override the default
+  cfg files, e.g. to test a config with keys added/removed), `ts_rate`
+  (time-surface `generation_rate_hz`, still 25 by default) and `gui`
+  (already existed; `false` skips rqt/rviz for headless replay runs).
 
 > **Local debug edits (not part of this work):** someone's in-progress
 > debug edits to `image_representation/src/ImageRepresentation.cpp`
@@ -482,6 +519,38 @@ the same paths in the `sbg_ros_driver` clone.
   `cd /root/catkin_ws/build && make run_tests_esvo2_core_gtest_test_gyro_prediction`.
   `catkin_test_results` then double-counts results (it reported 10 for 6
   actual tests); read the gtest binary's own output instead.
+- **Tracking traded sideways translation for yaw.** Beside a flat wall at one
+  depth (mostly vertical edges, 41° horizontal FOV), a lateral slide and a yaw
+  give almost the same image motion. On a recorded 1 m slide the solver
+  reported 10–24° of yaw the rig never made (bias-corrected gyro: −0.4°) and
+  only 0.2–0.26 m of translation. Fixed by `IMU_ROTATION_LOCK` (rotation from
+  the bias-corrected gyro, translation-only registration): replayed at 0.25x,
+  min_x went from −0.262 m (without the lock) to −0.527 m (with it), and max
+  yaw deviation from the gyro from 13.6° to 0.21°.
+- **The SBG gyro has ~0.004 rad/s (0.23 °/s) bias per axis,** which the
+  round-1 prediction integrated as rotation. Tracking now removes it
+  (`GYRO_BIAS`, or estimated from the first 2 s still window). **Hold the rig
+  still for 2 s after starting**; the log prints `Gyro bias estimated from ...`.
+  On the slide bag's still period the online estimator gave [0.00338,
+  -0.00419, -0.00376] rad/s against [0.003425, -0.004210, -0.003853] rad/s
+  measured offline — within 0.001 rad/s per axis.
+- **The cameras saturate the 4 M ev/s rate cap during motion** (left sat at
+  3.6–3.95 M ev/s through the whole slide; ~0.5 M ev/s noise floor at rest).
+  Time surfaces come out faint and noisy. Not fixed yet: next rig session,
+  test a higher cap and the sensor's noise filter.
+- **ESVO2's IMU mode (`USE_IMU: True`) is broken on this machine, upstream
+  included:** on MVSEC `indoor_flying1` mapping prints an accelerometer bias of
+  ~6.9e-310 (uninitialized memory) and crashes (`std::length_error`). Vision-
+  only mode tracks MVSEC (path ratio 0.88–0.92).
+- **`rosparam load` doesn't clear keys missing from the new file.** Because a
+  `roscore` stays up across separate `roslaunch` invocations (e.g. between
+  replay runs), a key set by one config (say `IMU_ROTATION_LOCK: True` from a
+  gyro-lock run) stays on the parameter server even after launching a config
+  that omits it, silently changing the next run's behavior. Symptom: a replay
+  meant to test the "keys removed" / default path instead reproduces the
+  locked results almost exactly. Clear stale keys first, e.g.
+  `rosparam delete /esvo2_Tracking/IMU_ROTATION_LOCK`, or restart `roscore`
+  between configs that add/remove keys.
 
 ## Known limitations / next steps
 
@@ -503,7 +572,14 @@ the same paths in the `sbg_ros_driver` clone.
   True` (fusion uses only 1 of every 4 frames, `esvo2_Mapping.cpp:452-459`),
   `maxNumFusionFrames: 5` (the cfg notes the original ESVO value was 40),
   patch sizes 15x7 / 5x31, and `BM_ZNCC_Threshold: 0.2`. Rectification
-  also hasn't been visually verified.
+  also hasn't been visually verified. This was measured before the camera
+  side swap was fixed (see "Gotchas"); since then the local map has held
+  1,900–5,100 points with no reset for 2.5+ min in a 30 s hand-held test,
+  and the EVK4/MVSEC regression replays used for `IMU_ROTATION_LOCK`
+  (see "Changes made", "Current status") ran with 0 tracking resets. Part
+  of what looked like drift here was the solver trading translation for
+  yaw (now fixed by `IMU_ROTATION_LOCK`, see "Gotchas"); whether the
+  block-matching suspects above still apply hasn't been re-checked.
 - **Gyro rotation prediction overshoots real rotation when the rig is
   nearly stationary.** In the mixed-motion validation, the pose/gyro
   rotation-speed ratio with prediction on is 1.00–1.04 in every band where
@@ -517,10 +593,12 @@ the same paths in the `sbg_ros_driver` clone.
   This is a known limitation, not a pass: it is not fixed by better
   calibration, only by a motion/stillness gate on the predictor.
 - **IMU fusion is disabled** (`USE_IMU: False` in both cfgs). Gyro-based
-  rotation prediction is on in tracking (see "Changes made"), but
-  translation still comes only from vision, mapping's IMU backend
-  (`BackendOptimization.cpp`) stays off, and gyro bias is not estimated
-  (the predictor uses raw gyro readings). With `USE_IMU: True` and `T_b_c`
+  rotation prediction is on in tracking (see "Changes made"), with
+  `IMU_ROTATION_LOCK` now also replacing registration's rotation solve
+  outright and gyro bias removed (`GYRO_BIAS`, or estimated from the first
+  still window; see "Changes made", "Gotchas"). Translation still comes
+  only from vision, and mapping's IMU backend (`BackendOptimization.cpp`)
+  stays off. With `USE_IMU: True` and `T_b_c`
   at identity, tracking previously produced poses that diverged to hundreds
   of meters within seconds of hand-held motion; with it disabled, mapping
   doesn't subscribe to `/imu/data` but still calls `getIMUInterval()` every
@@ -661,6 +739,37 @@ cleared up after the session restarted; relaunching them with
 
 To stop: `Ctrl+C` in each terminal (mapping/tracking are `required="true"`,
 so killing either one shuts down the rest of that launch file).
+
+### Replaying a bag
+
+To regression-test tracking without the rig, replay a recorded bag through
+`system_evk4_mapping.launch` with `scripts/replay_eval.sh` instead of live
+drivers. Example (the slide-tracking check from "Changes made" /
+"Gotchas: Tracking traded sideways translation for yaw"):
+
+```bash
+source /opt/ros/noetic/setup.bash; source /root/catkin_ws/devel/setup.bash
+O=/root/datasets/evk4/replays; C=$(rospack find esvo2_core)
+PLAYRATE=0.25 $C/scripts/replay_eval.sh $O/g1_lock.bag /root/datasets/evk4/slide_lr.bag \
+  "/evk4_left/events /evk4_right/events /imu/data_synced /imu/data" \
+  $C/launch/system/system_evk4_mapping.launch use_sim_time:=true gui:=false tracking_cfg:=$O/tracking_g1.yaml
+python3 $C/scripts/eval_slide.py $O/g1_lock.bag /root/datasets/evk4/slide_lr.bag $C/calib/evk4_stereo 0.003425,-0.004210,-0.003853
+```
+
+`use_sim_time:=true` makes the pipeline follow the bag's clock instead of
+the wall clock, `gui:=false` skips rqt/rviz, and `PLAYRATE` (env var, not a
+launch arg) slows playback so the cameras' real 4M ev/s cap doesn't clip a
+faster-than-real-time replay. `tracking_g1.yaml` here is
+`tracking_evk4_AA.yaml` plus `GYRO_BIAS: [0.003425, -0.004210, -0.003853]`:
+`GYRO_BIAS` is needed because this bag doesn't start with the rig still
+for `GYRO_BIAS_WINDOW` seconds, so the estimator would never accept a
+window and rotation prediction would run bias-uncorrected. `eval_slide.py`
+takes the same gyro bias (for reporting the pose/gyro yaw comparison) and
+prints tracked x-displacement over time plus the max yaw deviation from
+the gyro. Swap the launch file, topics and eval script to replay other
+scenarios, e.g. `eval_traj.py` against a ground-truth file for MVSEC bags
+(`system_upenn.launch`, used for the `USE_IMU: True` regression check in
+"Gotchas").
 
 ### Rebuilding after changes
 

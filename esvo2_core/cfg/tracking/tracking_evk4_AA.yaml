@@ -22,3 +22,12 @@ USE_IMU: False
 IMU_ROTATION_PREDICTION: True
 # camera time = IMU time + IMU_TIME_OFFSET (s), from calibrate_imu_camera_rotation.py
 IMU_TIME_OFFSET: -0.005
+# Rotation from the bias-corrected gyro, translation-only registration (see
+# docs/superpowers/specs/2026-09-18-gyro-locked-tracking-design.md). Without it,
+# beside a flat wall the solver explains a sideways slide as yaw.
+# Gyro bias: estimated from the first still window after start: hold the rig
+# still for GYRO_BIAS_WINDOW seconds. Set GYRO_BIAS: [bx, by, bz] (rad/s, IMU
+# frame) instead to skip estimation, e.g. for replays that do not start still.
+IMU_ROTATION_LOCK: True
+GYRO_BIAS_WINDOW: 2.0
+GYRO_STILL_MAX_STD: 0.0035
