@@ -66,8 +66,10 @@ namespace esvo2_core
     void refMapCallback(const sensor_msgs::PointCloud2::ConstPtr &msg);
     void refImuCallback(const sensor_msgs::ImuPtr &msg);
     void imuPredictionCallback(const sensor_msgs::ImuConstPtr &msg);
-    // Returns true if the gyro prediction was applied; biasCorrected tells whether a gyro bias was removed.
-    bool predictRotationWithGyro(double t_prev_frame, double t_cur_frame, bool &biasCorrected);
+    // Returns true if the gyro prediction was applied; biasCorrected tells whether a gyro bias was
+    // removed; locked tells whether this frame counts as IMU_ROTATION_LOCK-locked (also counted
+    // into nLocked_ here, in the same window as the periodic log, so the two stay in sync).
+    bool predictRotationWithGyro(double t_prev_frame, double t_cur_frame, bool &biasCorrected, bool &locked);
     void VBaBgCallback(const events_repacking_tool::V_ba_bg &msg);
     void groundTruthCallback(const geometry_msgs::PoseStampedConstPtr &msg);
     void timeSurface_NegaTS_Callback(
@@ -170,6 +172,7 @@ namespace esvo2_core
     bool bGyroJumpWarned_ = false; // re-arms once a sample is accepted normally again
     // gyro bias: GYRO_BIAS if configured, else estimated from the first still window
     std::unique_ptr<tools::GyroBiasEstimator> gyroBiasEstimator_; // null when GYRO_BIAS is configured
+    double gyroBiasWindow_ = 2.0, gyroBiasMaxStd_ = 0.0035;       // validated GYRO_BIAS_WINDOW/GYRO_STILL_MAX_STD, kept to re-create gyroBiasEstimator_ on a backward time jump
     bool bGyroBiasKnown_ = false;                          // guarded by gyro_mutex_
     Eigen::Vector3d gyroBias_ = Eigen::Vector3d::Zero();   // IMU frame, rad/s; guarded by gyro_mutex_
     // IMU_ROTATION_LOCK: translation-only solve on frames with a bias-corrected gyro prediction

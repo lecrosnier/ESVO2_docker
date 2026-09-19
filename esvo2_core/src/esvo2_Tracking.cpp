@@ -66,8 +66,16 @@ esvo2_Tracking::esvo2_Tracking(
   {
     if (pnh_.hasParam("GYRO_BIAS"))
       LOG(WARNING) << "GYRO_BIAS must be a list of 3 numbers (rad/s, IMU frame); estimating the bias instead";
-    gyroBiasEstimator_.reset(new tools::GyroBiasEstimator(tools::param(pnh_, "GYRO_BIAS_WINDOW", 2.0),
-                                                           tools::param(pnh_, "GYRO_STILL_MAX_STD", 0.0035)));
+    gyroBiasWindow_ = tools::param(pnh_, "GYRO_BIAS_WINDOW", 2.0);
+    gyroBiasMaxStd_ = tools::param(pnh_, "GYRO_STILL_MAX_STD", 0.0035);
+    if (gyroBiasWindow_ <= 0.0 || gyroBiasMaxStd_ <= 0.0)
+    {
+      LOG(WARNING) << "GYRO_BIAS_WINDOW and GYRO_STILL_MAX_STD must be > 0 (got " << gyroBiasWindow_ << ", "
+                   << gyroBiasMaxStd_ << "); using defaults (2.0, 0.0035)";
+      gyroBiasWindow_ = 2.0;
+      gyroBiasMaxStd_ = 0.0035;
+    }
+    gyroBiasEstimator_.reset(new tools::GyroBiasEstimator(gyroBiasWindow_, gyroBiasMaxStd_));
   }
   bImuRotationLock_ = tools::param(pnh_, "IMU_ROTATION_LOCK", false);
   if (bImuRotationLock_ && (!bImuRotationPrediction_ || bUseImu_))
@@ -352,10 +360,7 @@ esvo2_Tracking::curDataTransferring()
     if(bImuRotationPrediction_ && !bUseImu_ && ESVO2_System_Status_ == "WORKING") // no prediction during INITIALIZATION
     {
       bool biasCorrected = false;
-      const bool predicted = predictRotationWithGyro(t_prev_frame, cur_.t_.toSec(), biasCorrected);
-      bLockThisFrame_ = bImuRotationLock_ && predicted && biasCorrected;
-      if (bLockThisFrame_)
-        nLocked_++;
+      predictRotationWithGyro(t_prev_frame, cur_.t_.toSec(), biasCorrected, bLockThisFrame_);
     }
     Eigen::Matrix3d R_w_c = T_world_cur_.block(0, 0, 3, 3);
     T_world_cur_.block(0, 0, 3, 3) = fixRotationMatrix(R_w_c);
@@ -745,6 +750,10 @@ void esvo2_Tracking::imuPredictionCallback(const sensor_msgs::ImuConstPtr &msg)
       bGyroJumpWarned_ = true;
     }
     gyroBuf_.clear();
+    // The estimator's in-progress window may straddle the jump (mixing pre- and post-jump
+    // samples into one mean); re-create it so the next window starts clean at the next sample.
+    if (gyroBiasEstimator_ && !bGyroBiasKnown_)
+      gyroBiasEstimator_.reset(new tools::GyroBiasEstimator(gyroBiasWindow_, gyroBiasMaxStd_));
   }
   else if (!gyroBuf_.empty() && t <= gyroBuf_.back().t)
   {
@@ -768,7 +777,7 @@ void esvo2_Tracking::imuPredictionCallback(const sensor_msgs::ImuConstPtr &msg)
 
 // Rotates T_world_cur_ (the previous frame's pose) by the gyro-integrated
 // camera rotation between the two frames. Translation is left unchanged.
-bool esvo2_Tracking::predictRotationWithGyro(double t_prev_frame, double t_cur_frame, bool &biasCorrected)
+bool esvo2_Tracking::predictRotationWithGyro(double t_prev_frame, double t_cur_frame, bool &biasCorrected, bool &locked)
 {
   std::vector<tools::GyroSample> samples;
   Eigen::Vector3d bias;
@@ -794,6 +803,9 @@ bool esvo2_Tracking::predictRotationWithGyro(double t_prev_frame, double t_cur_f
   {
     nPredSkip_++;
   }
+  locked = bImuRotationLock_ && applied && biasCorrected;
+  if (locked)
+    nLocked_++;
   if ((ros::WallTime::now() - lastPredLog_).toSec() >= 5.0)
   {
     LOG(INFO) << "IMU rotation prediction: " << nPredOk_ << " predicted, " << nPredSkip_ << " skipped, mean "
