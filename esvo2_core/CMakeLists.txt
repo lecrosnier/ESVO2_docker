@@ -107,4 +107,8 @@ if(CATKIN_ENABLE_TESTING)
     # source-build path, so TEST() files with no main() of their own need it added.
     target_link_libraries(test_gyro_prediction gtest_main)
   endif()
+  catkin_add_gtest(test_gyro_bias test/test_gyro_bias.cpp)
+  if(TARGET test_gyro_bias)
+    target_link_libraries(test_gyro_bias gtest_main)
+  endif()
 endif()
