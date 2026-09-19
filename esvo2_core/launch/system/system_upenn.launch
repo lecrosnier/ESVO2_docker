@@ -8,7 +8,7 @@
   <arg name="calibInfoDirStr" default="$(find esvo2_core)/calib/upenn"/>
   <!-- <arg name="calibInfoDirStr" default="$(find esvo2_core)/calib/dsec/zurich_city_04_a"/> -->
 
-  <node name="image_representation_left" pkg="image_representation" type="image_representation" output="screen" >
+  <node name="image_representation_left" pkg="image_representation" type="image_representation" output="screen" clear_params="true" >
     <remap from="events" to="/davis/left/events" />
     <remap from="imu" to="/davis/left/imu" />
     <remap from="image" to="/davis/left/image_raw" />
@@ -24,7 +24,7 @@
     <rosparam param="calibInfoDir" subst_value="true">$(arg calibInfoDirStr)</rosparam>
   </node>
 
-  <node name="image_representation_right" pkg="image_representation" type="image_representation" output="screen" >
+  <node name="image_representation_right" pkg="image_representation" type="image_representation" output="screen" clear_params="true" >
     <remap from="events" to="/davis/right/events" />
     <remap from="imu" to="/davis/right/imu" />
     <remap from="image" to="/davis/right/image_raw" />
@@ -37,7 +37,7 @@
 
   <!-- Mapping2 node -->
   <!-- launch-prefix="gdb -ex run -\-args" -->
-  <node name="esvo2_Mapping" pkg="esvo2_core" type="esvo2_Mapping" output="screen" required="true">
+  <node name="esvo2_Mapping" pkg="esvo2_core" type="esvo2_Mapping" output="screen" required="true" clear_params="true">
     <remap from="time_surface_left" to="image_representation_TS_l" />
     <remap from="time_surface_right" to="image_representation_TS_r" />
     <remap from="time_surface_negative" to="image_representation_negative_TS_l" />
@@ -54,7 +54,7 @@
   </node>
 
   <!-- Tracking node -->
-  <node name="esvo2_Tracking" pkg="esvo2_core" type="esvo2_Tracking" output="screen" required="true">
+  <node name="esvo2_Tracking" pkg="esvo2_core" type="esvo2_Tracking" output="screen" required="true" clear_params="true">
     <remap from="time_surface_left" to="image_representation_TS_l" />
     <remap from="time_surface_right" to="image_representation_TS_r" />
     <remap from="time_surface_negative" to="image_representation_negative_TS_l" />

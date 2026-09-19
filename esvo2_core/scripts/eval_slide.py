@@ -49,6 +49,8 @@ d = (P[:, 1:4] - P[0, 1:4]) @ R0                       # camera frame of the fir
 yaw_trk = np.degrees([rotvec(R0.T @ q2R(*p[4:]))[1] for p in P])
 
 G = G[G[:, 0] >= P[0, 0]]
+if len(G) == 0:
+    sys.exit("no IMU samples remain after the first pose time (%.3f); check the bag has /imu/data_synced covering the poses" % P[0, 0])
 w_cam = (R_b_c.T @ (G[:, 1:] - bias).T).T               # bias-corrected rate, camera frame
 yaw_gyro_samples = np.degrees(np.concatenate([[0.0], np.cumsum(w_cam[1:, 1] * np.diff(G[:, 0]))]))
 yaw_gyro = np.interp(P[:, 0], G[:, 0], yaw_gyro_samples)

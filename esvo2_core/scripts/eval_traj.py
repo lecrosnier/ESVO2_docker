@@ -20,6 +20,8 @@ label = sys.argv[3] if len(sys.argv) > 3 else sys.argv[2]
 i = np.clip(np.searchsorted(gt[:, 0], est[:, 0]), 1, len(gt) - 1)
 i = np.where(np.abs(gt[i - 1, 0] - est[:, 0]) < np.abs(gt[i, 0] - est[:, 0]), i - 1, i)
 ok = np.abs(gt[i, 0] - est[:, 0]) < 0.02
+if ok.sum() < 3:
+    sys.exit("too few pose/ground-truth matches within 20 ms: %d (need >= 3)" % ok.sum())
 A, B = est[ok, 1:4], gt[i[ok], 1:4]
 
 

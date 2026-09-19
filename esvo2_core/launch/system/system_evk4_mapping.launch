@@ -20,7 +20,7 @@
   <!-- gui:=false skips rqt and rviz (headless) -->
   <arg name="gui" default="true"/>
 
-  <node name="image_representation_left" pkg="image_representation" type="image_representation" output="screen" >
+  <node name="image_representation_left" pkg="image_representation" type="image_representation" output="screen" clear_params="true" >
     <remap from="events" to="/evk4_left/events" />
     <remap from="image" to="/evk4_left/image_raw" />
     <remap from="camera_info" to="/evk4_left/camera_info" />
@@ -40,7 +40,7 @@
     <param name="generation_rate_hz" value="$(arg ts_rate)" />
   </node>
 
-  <node name="image_representation_right" pkg="image_representation" type="image_representation" output="screen" >
+  <node name="image_representation_right" pkg="image_representation" type="image_representation" output="screen" clear_params="true" >
     <remap from="events" to="/evk4_right/events" />
     <remap from="image" to="/evk4_right/image_raw" />
     <remap from="camera_info" to="/evk4_right/camera_info" />
@@ -52,7 +52,7 @@
   </node>
 
   <!-- Mapping node -->
-  <node name="esvo2_Mapping" pkg="esvo2_core" type="esvo2_Mapping" output="screen" required="true">
+  <node name="esvo2_Mapping" pkg="esvo2_core" type="esvo2_Mapping" output="screen" required="true" clear_params="true">
     <remap from="time_surface_left" to="image_representation_TS_l" />
     <remap from="time_surface_right" to="image_representation_TS_r" />
     <remap from="time_surface_negative" to="image_representation_negative_TS_l" />
@@ -70,7 +70,7 @@
   </node>
 
   <!-- Tracking node -->
-  <node name="esvo2_Tracking" pkg="esvo2_core" type="esvo2_Tracking" output="screen" required="true">
+  <node name="esvo2_Tracking" pkg="esvo2_core" type="esvo2_Tracking" output="screen" required="true" clear_params="true">
     <remap from="time_surface_left" to="image_representation_TS_l" />
     <remap from="time_surface_right" to="image_representation_TS_r" />
     <remap from="time_surface_negative" to="image_representation_negative_TS_l" />
