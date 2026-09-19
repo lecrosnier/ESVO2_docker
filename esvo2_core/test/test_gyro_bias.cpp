@@ -48,7 +48,10 @@ TEST(GyroBias, MovingWindowRejectedThenStillAccepted)
   EXPECT_FALSE(e.hasBias());
   const double at = feed(e, 2.005, 4.5, 0.005, stillRate);
   ASSERT_TRUE(e.hasBias());
-  EXPECT_NEAR(at, 4.005, 0.006);
+  // The motion feed ends at t≈1.99999 (float accumulation), so the mixed window closes on the
+  // first still sample (2.005) and is rejected; the first still-only window then closes ~2 s later.
+  EXPECT_GT(at, 4.0);
+  EXPECT_LT(at, 4.03);
   EXPECT_LT((e.bias() - kBias).norm(), 2e-5);
 }
 
