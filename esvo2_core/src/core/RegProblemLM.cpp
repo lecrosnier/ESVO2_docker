@@ -271,6 +271,10 @@ int RegProblemLM::df(const Eigen::Matrix<double,6,1>& x, Eigen::MatrixXd& fjac) 
 
   // LOG(INFO) << "fjac:\n" << fjac;
   // LOG(INFO) << "Jacobian Computation takes " << tt.toc() << " ms.";
+  // Rotation locked: no rotation update. Eigen's LM rescales zero-norm columns to 1, so the
+  // system stays well-posed.
+  if (bFixRotation_)
+    fjac.leftCols(3).setZero();
   return 0;
 }
 

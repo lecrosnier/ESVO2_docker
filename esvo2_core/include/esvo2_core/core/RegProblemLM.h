@@ -98,6 +98,9 @@ struct RegProblemLM : public factor::OptimizationFunctor<double>
     const Eigen::Matrix<double, 6, 1>& x) const;
   void addMotionUpdate( const Eigen::Matrix<double, 6, 1>& dx );
   void setPose();
+  // When set, df() zeroes the rotation (Cayley) columns: LM solves translation only and
+  // the rotation stays at its initial value (e.g. the gyro prediction).
+  void setFixRotation(bool fix) { bFixRotation_ = fix; }
   Eigen::Matrix4d getPose();
 
   // optimization
@@ -147,6 +150,7 @@ struct RegProblemLM : public factor::OptimizationFunctor<double>
   Eigen::Matrix<double,12,6> J_G_0_;
   // debug
   bool bPrint_;
+  bool bFixRotation_ = false;
 };// struct RegProblemLM
 }// namespace core
 }// namespace esvo2_core

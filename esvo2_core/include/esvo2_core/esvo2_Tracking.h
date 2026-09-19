@@ -172,6 +172,10 @@ namespace esvo2_core
     std::unique_ptr<tools::GyroBiasEstimator> gyroBiasEstimator_; // null when GYRO_BIAS is configured
     bool bGyroBiasKnown_ = false;                          // guarded by gyro_mutex_
     Eigen::Vector3d gyroBias_ = Eigen::Vector3d::Zero();   // IMU frame, rad/s; guarded by gyro_mutex_
+    // IMU_ROTATION_LOCK: translation-only solve on frames with a bias-corrected gyro prediction
+    bool bImuRotationLock_ = false;
+    bool bLockThisFrame_ = false;
+    size_t nLocked_ = 0; // frames locked since the last periodic prediction log
     std::string resultPath_;
 
     Eigen::Matrix<double, 4, 4> T_world_ref_;

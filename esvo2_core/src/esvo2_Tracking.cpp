@@ -69,6 +69,19 @@ esvo2_Tracking::esvo2_Tracking(
     gyroBiasEstimator_.reset(new tools::GyroBiasEstimator(tools::param(pnh_, "GYRO_BIAS_WINDOW", 2.0),
                                                            tools::param(pnh_, "GYRO_STILL_MAX_STD", 0.0035)));
   }
+  bImuRotationLock_ = tools::param(pnh_, "IMU_ROTATION_LOCK", false);
+  if (bImuRotationLock_ && (!bImuRotationPrediction_ || bUseImu_))
+  {
+    LOG(WARNING) << "IMU_ROTATION_LOCK needs IMU_ROTATION_PREDICTION: True and USE_IMU: False; lock disabled";
+    bImuRotationLock_ = false;
+  }
+  if (bImuRotationLock_ && rpType_ != REG_ANALYTICAL)
+  {
+    LOG(WARNING) << "IMU_ROTATION_LOCK only works with RegProblemType: 1 (analytical); lock disabled";
+    bImuRotationLock_ = false;
+  }
+  if (bImuRotationLock_)
+    LOG(INFO) << "IMU rotation lock enabled: rotation from the gyro, translation-only registration";
   lastPredLog_ = ros::WallTime::now();
   resultPath_             = tools::param(pnh_, "PATH_TO_SAVE_TRAJECTORY", std::string());
   nh_.setParam("/ESVO2_SYSTEM_STATUS", ESVO2_System_Status_);
@@ -188,7 +201,8 @@ void esvo2_Tracking::TrackingLoop()
         nh_.setParam("/ESVO2_SYSTEM_STATUS", "WORKING");
         LOG(INFO) << "ESVO2_SYSTEM_STATUS: WORKING";
       }
-      
+
+      rpSolver_.setFixRotation(bLockThisFrame_);
       // TicToc t_coarse;
       if(rpType_ == REG_NUMERICAL)
         rpSolver_.solve_numerical();
@@ -281,6 +295,7 @@ esvo2_Tracking::curDataTransferring()
   if(cur_.t_ == TS_it->first)
     return false;
   const double t_prev_frame = cur_.t_.toSec();
+  bLockThisFrame_ = false;
   cur_.t_ = TS_it->first;
   cur_.pTsObs_ = &TS_it->second;
 
@@ -337,7 +352,10 @@ esvo2_Tracking::curDataTransferring()
     if(bImuRotationPrediction_ && !bUseImu_ && ESVO2_System_Status_ == "WORKING") // no prediction during INITIALIZATION
     {
       bool biasCorrected = false;
-      predictRotationWithGyro(t_prev_frame, cur_.t_.toSec(), biasCorrected);
+      const bool predicted = predictRotationWithGyro(t_prev_frame, cur_.t_.toSec(), biasCorrected);
+      bLockThisFrame_ = bImuRotationLock_ && predicted && biasCorrected;
+      if (bLockThisFrame_)
+        nLocked_++;
     }
     Eigen::Matrix3d R_w_c = T_world_cur_.block(0, 0, 3, 3);
     T_world_cur_.block(0, 0, 3, 3) = fixRotationMatrix(R_w_c);
@@ -785,6 +803,14 @@ bool esvo2_Tracking::predictRotationWithGyro(double t_prev_frame, double t_cur_f
       LOG(WARNING) << "IMU rotation prediction skipped " << nPredSkip_ << " of " << nTotal << " frames ("
                    << (nTotal ? 100.0 * nPredSkip_ / nTotal : 0.0)
                    << "%) in the last 5 s — check /imu/data_synced";
+    if (bImuRotationLock_)
+    {
+      LOG(INFO) << "IMU rotation lock: " << nLocked_ << " of " << nTotal << " frames locked";
+      if (nTotal > 0 && 5 * nLocked_ < 4 * nTotal)
+        LOG(WARNING) << "IMU rotation lock applied to only " << nLocked_ << " of " << nTotal
+                     << " frames in the last 5 s (bias not known yet, or gyro gaps)";
+    }
+    nLocked_ = 0;
     nPredOk_ = nPredSkip_ = 0;
     predAngleSumDeg_ = 0.0;
     lastPredLog_ = ros::WallTime::now();

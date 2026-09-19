@@ -248,6 +248,12 @@ bool RegProblemSolverLM::solve_analytical()
   return 0;
 }
 
+void RegProblemSolverLM::setFixRotation(bool fix)
+{
+  if (regProblemPtr_)
+    regProblemPtr_->setFixRotation(fix);
+}
+
 void RegProblemSolverLM::setRegPublisher(
   image_transport::Publisher* reprojMap_pub)
 {

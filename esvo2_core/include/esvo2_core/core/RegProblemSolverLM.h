@@ -45,6 +45,8 @@ class RegProblemSolverLM
   bool resetRegProblem(shared_ptr<RegProblemConfig> &rpConfigPtr, CameraSystem::Ptr& camSysPtr, RefFrame* ref, CurFrame* cur);
   bool solve_numerical();// relatively slower
   bool solve_analytical();// faster
+  // Translation-only solve for the next solve_analytical() (analytical problem only).
+  void setFixRotation(bool fix);
 
   // For test and visualization
   void setRegPublisher(image_transport::Publisher* reprojMap_pub);
