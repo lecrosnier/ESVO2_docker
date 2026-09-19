@@ -36,6 +36,8 @@
 
 #include <esvo2_core/factor/imu_integration.h>
 #include <esvo2_core/tools/gyro_prediction.h>
+#include <esvo2_core/tools/gyro_bias.h>
+#include <memory>
 #include <events_repacking_tool/V_ba_bg.h>
 
 namespace esvo2_core
@@ -64,7 +66,8 @@ namespace esvo2_core
     void refMapCallback(const sensor_msgs::PointCloud2::ConstPtr &msg);
     void refImuCallback(const sensor_msgs::ImuPtr &msg);
     void imuPredictionCallback(const sensor_msgs::ImuConstPtr &msg);
-    void predictRotationWithGyro(double t_prev_frame, double t_cur_frame);
+    // Returns true if the gyro prediction was applied; biasCorrected tells whether a gyro bias was removed.
+    bool predictRotationWithGyro(double t_prev_frame, double t_cur_frame, bool &biasCorrected);
     void VBaBgCallback(const events_repacking_tool::V_ba_bg &msg);
     void groundTruthCallback(const geometry_msgs::PoseStampedConstPtr &msg);
     void timeSurface_NegaTS_Callback(
@@ -165,6 +168,10 @@ namespace esvo2_core
     double predAngleSumDeg_ = 0.0;
     ros::WallTime lastPredLog_;
     bool bGyroJumpWarned_ = false; // re-arms once a sample is accepted normally again
+    // gyro bias: GYRO_BIAS if configured, else estimated from the first still window
+    std::unique_ptr<tools::GyroBiasEstimator> gyroBiasEstimator_; // null when GYRO_BIAS is configured
+    bool bGyroBiasKnown_ = false;                          // guarded by gyro_mutex_
+    Eigen::Vector3d gyroBias_ = Eigen::Vector3d::Zero();   // IMU frame, rad/s; guarded by gyro_mutex_
     std::string resultPath_;
 
     Eigen::Matrix<double, 4, 4> T_world_ref_;

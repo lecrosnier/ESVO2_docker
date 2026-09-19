@@ -55,6 +55,20 @@ esvo2_Tracking::esvo2_Tracking(
   bUseImu_ = tools::param(pnh_, "USE_IMU", true);
   bImuRotationPrediction_ = tools::param(pnh_, "IMU_ROTATION_PREDICTION", false);
   imuTimeOffset_ = tools::param(pnh_, "IMU_TIME_OFFSET", 0.0);
+  // tools::param cannot print a vector, so GYRO_BIAS is read directly.
+  std::vector<double> vGyroBias;
+  if (pnh_.getParam("GYRO_BIAS", vGyroBias) && vGyroBias.size() == 3)
+  {
+    gyroBias_ = Eigen::Vector3d(vGyroBias[0], vGyroBias[1], vGyroBias[2]);
+    bGyroBiasKnown_ = true;
+  }
+  else
+  {
+    if (pnh_.hasParam("GYRO_BIAS"))
+      LOG(WARNING) << "GYRO_BIAS must be a list of 3 numbers (rad/s, IMU frame); estimating the bias instead";
+    gyroBiasEstimator_.reset(new tools::GyroBiasEstimator(tools::param(pnh_, "GYRO_BIAS_WINDOW", 2.0),
+                                                           tools::param(pnh_, "GYRO_STILL_MAX_STD", 0.0035)));
+  }
   lastPredLog_ = ros::WallTime::now();
   resultPath_             = tools::param(pnh_, "PATH_TO_SAVE_TRAJECTORY", std::string());
   nh_.setParam("/ESVO2_SYSTEM_STATUS", ESVO2_System_Status_);
@@ -79,6 +93,11 @@ esvo2_Tracking::esvo2_Tracking(
       LOG(WARNING) << "IMU_ROTATION_PREDICTION is ignored while USE_IMU is true";
     imu_prediction_sub_ = nh_.subscribe("imu_prediction", 2000, &esvo2_Tracking::imuPredictionCallback, this);
     LOG(INFO) << "IMU rotation prediction enabled, IMU_TIME_OFFSET = " << imuTimeOffset_ << " s";
+    if (bGyroBiasKnown_)
+      LOG(INFO) << "Gyro bias from GYRO_BIAS: " << gyroBias_.transpose() << " rad/s";
+    else
+      LOG(INFO) << "Gyro bias: estimating from the first " << gyroBiasEstimator_->window()
+                << " s still window (hold the rig still); prediction is uncorrected until then";
   }
   V_ba_bg_sub_ = nh_.subscribe("/esvo2_mapping/V_ba_bg", 0, &esvo2_Tracking::VBaBgCallback, this);
   /*** For Visualization and Test ***/
@@ -316,7 +335,10 @@ esvo2_Tracking::curDataTransferring()
       T_world_cur_.block(0, 0, 3, 3) =  R_w_c * R_b_c_* q.toRotationMatrix() * R_b_c_.inverse();
     } 
     if(bImuRotationPrediction_ && !bUseImu_ && ESVO2_System_Status_ == "WORKING") // no prediction during INITIALIZATION
-      predictRotationWithGyro(t_prev_frame, cur_.t_.toSec());
+    {
+      bool biasCorrected = false;
+      predictRotationWithGyro(t_prev_frame, cur_.t_.toSec(), biasCorrected);
+    }
     Eigen::Matrix3d R_w_c = T_world_cur_.block(0, 0, 3, 3);
     T_world_cur_.block(0, 0, 3, 3) = fixRotationMatrix(R_w_c);
     cur_.tr_ = Transformation(T_world_cur_);
@@ -715,21 +737,35 @@ void esvo2_Tracking::imuPredictionCallback(const sensor_msgs::ImuConstPtr &msg)
     bGyroJumpWarned_ = false; // sequence is healthy again
   }
   gyroBuf_.push_back({t, Eigen::Vector3d(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z)});
+  if (gyroBiasEstimator_ && !bGyroBiasKnown_ && gyroBiasEstimator_->add(gyroBuf_.back()))
+  {
+    gyroBias_ = gyroBiasEstimator_->bias();
+    bGyroBiasKnown_ = true;
+    LOG(INFO) << "Gyro bias estimated from " << gyroBiasEstimator_->window() << " s still window: "
+              << gyroBias_.transpose() << " rad/s (std " << gyroBiasEstimator_->biasStd().transpose() << ")";
+  }
   while (!gyroBuf_.empty() && gyroBuf_.front().t < t - 2.0)
     gyroBuf_.pop_front();
 }
 
 // Rotates T_world_cur_ (the previous frame's pose) by the gyro-integrated
 // camera rotation between the two frames. Translation is left unchanged.
-void esvo2_Tracking::predictRotationWithGyro(double t_prev_frame, double t_cur_frame)
+bool esvo2_Tracking::predictRotationWithGyro(double t_prev_frame, double t_cur_frame, bool &biasCorrected)
 {
   std::vector<tools::GyroSample> samples;
+  Eigen::Vector3d bias;
   {
     std::lock_guard<std::mutex> lock(gyro_mutex_);
     samples.assign(gyroBuf_.begin(), gyroBuf_.end());
+    biasCorrected = bGyroBiasKnown_;
+    bias = gyroBias_;
   }
+  // Subtracted here rather than on arrival so samples buffered before the estimate completed are corrected too.
+  if (biasCorrected)
+    tools::subtractBias(samples, bias);
   Eigen::Matrix3d R_imu;
-  if (tools::gyroDeltaRotation(samples, t_prev_frame, t_cur_frame, imuTimeOffset_, R_imu))
+  const bool applied = tools::gyroDeltaRotation(samples, t_prev_frame, t_cur_frame, imuTimeOffset_, R_imu);
+  if (applied)
   {
     Eigen::Matrix3d R_c = tools::imuToCameraRotation(R_imu, R_b_c_);
     T_world_cur_.block<3, 3>(0, 0) = T_world_cur_.block<3, 3>(0, 0) * R_c;
@@ -753,6 +789,7 @@ void esvo2_Tracking::predictRotationWithGyro(double t_prev_frame, double t_cur_f
     predAngleSumDeg_ = 0.0;
     lastPredLog_ = ros::WallTime::now();
   }
+  return applied;
 }
 
 }// namespace esvo2_core
