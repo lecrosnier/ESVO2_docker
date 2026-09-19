@@ -7,7 +7,13 @@
        (cameras publish dvs_msgs on /evk4_left|right/events; SBG publishes
        sensor_msgs/Imu directly on /imu/data, which is what esvo2_Mapping /
        esvo2_Tracking subscribe to already, so no remap is needed) -->
-  <rosparam param="/use_sim_time">false</rosparam>
+  <!-- Replay of a recorded bag: use_sim_time:=true, gui:=false, and optionally
+       other configs / time-surface rate (see scripts/replay_eval.sh) -->
+  <arg name="use_sim_time" default="false"/>
+  <param name="/use_sim_time" value="$(arg use_sim_time)"/>
+  <arg name="mapping_cfg" default="$(find esvo2_core)/cfg/mapping/mapping_evk4_AA_mapping.yaml"/>
+  <arg name="tracking_cfg" default="$(find esvo2_core)/cfg/tracking/tracking_evk4_AA.yaml"/>
+  <arg name="ts_rate" default="25"/>
 
   <!-- Calibration folder -->
   <arg name="calibInfoDirStr" default="$(find esvo2_core)/calib/evk4_stereo"/>
@@ -31,7 +37,7 @@
          (measured ~20Hz actual under load) and left, which does strictly
          more work than right (AA map + dx/dy gradients), stalls outright
          when both compete for CPU chasing an unreachable target. -->
-    <param name="generation_rate_hz" value="25" />
+    <param name="generation_rate_hz" value="$(arg ts_rate)" />
   </node>
 
   <node name="image_representation_right" pkg="image_representation" type="image_representation" output="screen" >
@@ -42,7 +48,7 @@
 
     <rosparam command="load" file="$(find image_representation)/cfg/image_representation_fast_r.yaml" />
     <rosparam param="calibInfoDir" subst_value="true">$(arg calibInfoDirStr)</rosparam>
-    <param name="generation_rate_hz" value="25" />
+    <param name="generation_rate_hz" value="$(arg ts_rate)" />
   </node>
 
   <!-- Mapping node -->
@@ -60,7 +66,7 @@
     <rosparam param="world_frame_id">"map"</rosparam>
     <rosparam param="calibInfoDir" subst_value="true">$(arg calibInfoDirStr)</rosparam>
 
-    <rosparam command="load" file="$(find esvo2_core)/cfg/mapping/mapping_evk4_AA_mapping.yaml" />
+    <rosparam command="load" file="$(arg mapping_cfg)" />
   </node>
 
   <!-- Tracking node -->
@@ -78,7 +84,7 @@
     <rosparam param="world_frame_id">"map"</rosparam>
     <rosparam param="calibInfoDir" subst_value="true">$(arg calibInfoDirStr)</rosparam>
 
-    <rosparam command="load" file="$(find esvo2_core)/cfg/tracking/tracking_evk4_AA.yaml" />
+    <rosparam command="load" file="$(arg tracking_cfg)" />
   </node>
 
   <!-- Visualization -->
