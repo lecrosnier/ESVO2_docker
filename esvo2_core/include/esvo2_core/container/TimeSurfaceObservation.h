@@ -243,6 +243,17 @@ struct TimeSurfaceObservation
     cv::cv2eigen(cv_dFlippedTS_dv_left, dTS_negative_dv_left_);
   }
 
+  // Single-precision copies of TS_left_ / TS_right_, read only by the mapping
+  // node's float path (MAPPING_FLOAT); tracking never reads them. Refreshed by
+  // EventBM::createMatchProblem after its optional blur, so they always hold
+  // exactly what the double path reads (the surfaces are 8-bit, so the cast is exact).
+  inline void refreshFloatMirrors()
+  {
+    TS_left_f_ = TS_left_.cast<float>();
+    TS_right_f_ = TS_right_.cast<float>();
+  }
+  Eigen::MatrixXf TS_left_f_, TS_right_f_;
+
   Eigen::MatrixXd TS_left_, TS_right_, TS_last_, AA_map_, TS_last_du, TS_last_dv;
   Eigen::MatrixXd TS_blurred_left_;
   Eigen::MatrixXd TS_negative_left_;
