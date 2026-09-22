@@ -132,19 +132,6 @@ TEST(Golden, FloatBlockMatchingMeetsSpec)
   std::printf("[golden BM] rel d invDepth: p50 %.3g p99 %.3g max %.3g\n",
               percentile(inv_rel, 0.5), percentile(inv_rel, 0.99), percentile(inv_rel, 1.0));
   EXPECT_GE(same, 0.99 * events);
-  // Not exact equality: match_an_event2's coarse-marking loop computes its
-  // window bounds in size_t (`disp - searching_start_pos - searching_step`),
-  // so whenever the very first coarse candidate (disp == searching_start_pos)
-  // passes the preliminary threshold, the negative lower bound wraps to a
-  // huge size_t and the mixed signed/unsigned loop condition drops the pass
-  // entirely -- see task-5-report.md ("Arithmetic difference found") for a
-  // standalone repro. match_an_event2_f does the same windowing in signed int
-  // (as specified) and is not affected, so it occasionally fine-searches (and
-  // accepts) a low disparity that the double path silently skipped. This is a
-  // pre-existing double-path quirk, out of scope to fix here (global
-  // constraints: double path changes only via the named extractions), and
-  // the spec's acceptance bar for matched-by-both events is the same >= 99%
-  // used for `same` above, not universal equality.
-  EXPECT_GE(disp_ok, 0.99 * both);
-  EXPECT_GE(inv_ok, 0.99 * both);
+  EXPECT_EQ(disp_ok, both);
+  EXPECT_EQ(inv_ok, both);
 }

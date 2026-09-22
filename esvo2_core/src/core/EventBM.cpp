@@ -1270,10 +1270,21 @@ bool esvo2_core::core::EventBM::epipolarSearchingCoarse_f(
     // add to preliminarily match list
     if(cost <= ZNCC_Threshold_*1.035)
     {
-      const int rel = (int)disp - (int)searching_start_pos;
-      for(int i = rel - (int)searching_step; i < rel + (int)searching_step + 1; i++)
-        if(i >= 0 && i < (int)s.searching_or_not.size())
-          s.searching_or_not[i] = 1;
+      // Mirrors epipolarSearchingCoarse, whose int/size_t comparison skips
+      // marking when disp - start < step; kept identical so both paths
+      // agree (A1). There, `int i = disp - searching_start_pos -
+      // searching_step` (all size_t) underflows and truncates back to the
+      // intended negative value, but the loop condition `i < disp -
+      // searching_start_pos + searching_step + 1` computes its right side
+      // in size_t too, so comparing it against negative `i` promotes `i` to
+      // a huge unsigned value and the loop body never runs.
+      if(disp - searching_start_pos >= searching_step)
+      {
+        const int rel = (int)disp - (int)searching_start_pos;
+        for(int i = rel - (int)searching_step; i < rel + (int)searching_step + 1; i++)
+          if(i >= 0 && i < (int)s.searching_or_not.size())
+            s.searching_or_not[i] = 1;
+      }
     }
     if(cost <= min_cost)
     {
