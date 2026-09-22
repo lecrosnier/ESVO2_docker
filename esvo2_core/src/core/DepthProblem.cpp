@@ -24,7 +24,8 @@ void DepthProblem::setProblem(
   T_world_virtual_ = T_world_virtual;
   pStampedTsObs_ = pStampedTsObs;
   problem_lr_ = problem_lr;
-  if(problem_lr)
+  // Only the temporal (left-to-last) problem warps with T_last_now_ (warping, df).
+  if(!problem_lr)
   {
     T_last_now_ = pStampedTsObs_->second.tr_last_.getTransformationMatrix().inverse() * pStampedTsObs_->second.tr_.getTransformationMatrix();
   }

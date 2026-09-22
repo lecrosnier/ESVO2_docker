@@ -111,4 +111,15 @@ if(CATKIN_ENABLE_TESTING)
   if(TARGET test_gyro_bias)
     target_link_libraries(test_gyro_bias gtest_main)
   endif()
+  # gtest linked against the core library. ESVO2_CORE_SOURCE_DIR lets a test
+  # find calib/ and cfg/ in the source tree.
+  function(esvo2_core_add_lib_gtest name)
+    catkin_add_gtest(${name} test/${name}.cpp)
+    if(TARGET ${name})
+      target_link_libraries(${name} gtest_main ${PROJECT_NAME}_LIB
+        ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp)
+      target_compile_definitions(${name} PRIVATE ESVO2_CORE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    endif()
+  endfunction()
+  esvo2_core_add_lib_gtest(test_depth_problem_temporal)
 endif()
