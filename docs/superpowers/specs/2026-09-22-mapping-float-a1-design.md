@@ -160,13 +160,14 @@ precedence over the sections above.
 1. **The float path covers the static (left-right) path only**: static block
    matching (`match_an_event2`) and the static depth solve (`dpSolver_`). The
    temporal path stays double. That includes temporal BM (already excluded
-   above, via SSIM) and the temporal depth solve (`dpSolver_ln_`). The reason
-   for the temporal depth solve is a pre-existing bug, present since the
-   upstream first commit: `DepthProblem::setProblem` sets `T_last_now_` only
-   when `problem_lr` is true, but `warping()` reads it only when `problem_lr`
-   is false. So the temporal depth solve warps with an uninitialised matrix,
-   its output is undefined, and it cannot be checked for equivalence. Fixing
-   it would change behaviour, so it is left for a separate decision.
+   above, via SSIM) and the temporal depth solve (`dpSolver_ln_`). A1 stays
+   static-only to keep its scope small. Found while planning:
+   `DepthProblem::setProblem` set `T_last_now_` only for the static problem,
+   while only the temporal one reads it. It was fixed in `2f279fd`. Before
+   the fix, the temporal solve read the correct value only because heap
+   memory freed by the static solve was reused (964 of 964 setups on a
+   replay). The fix does not change current results, but the float path's
+   different allocation pattern would have broken the old code silently.
 2. **Only two float mirrors are needed**: `TS_left_f_` and `TS_right_f_`.
    `init_single_point` calls only `DepthProblem::operator()`, never `df()`,
    so `TS_last_du`/`TS_last_dv` are not on the live path, and `AA_map_` and

@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Work on branch `evk4-gyro-locked-tracking` in `/root/catkin_ws/src/ESVO2`, in place. The catkin workspace builds from this path, so do not create a worktree. Do not push.
-- Build: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core`. Run one gtest: `catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_<name>`, or run the binary `/root/catkin_ws/devel/lib/esvo2_core/<name>` directly after building.
+- Build: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core`. Build and run one gtest: `catkin_make -j4 --pkg esvo2_core` once after any CMakeLists.txt change, then `cd /root/catkin_ws/build && make -j6 <name> && /root/catkin_ws/devel/lib/esvo2_core/<name>`. (`catkin_make --pkg esvo2_core run_tests_...` does not work: catkin_make takes the target for a package name and ignores it.)
 - `MAPPING_FLOAT` defaults to `False` in the committed YAML throughout this plan.
 - Float path scope: static block matching (`EventBM::match_an_event2`) and the static depth solve (`dpSolver_`, `slove_lr == true`) only. Temporal BM, the temporal depth solve (`dpSolver_ln_`), fusion, regularisation and tracking are not modified.
 - Double-path code changes only by the behaviour-preserving extractions named in the tasks: `EventBM::disparityRange` (Task 4) and `DepthProblemSolver::appendDepthPoint` (Task 6). The golden sanity test (Task 4) must stay green after every later task.
@@ -55,7 +55,7 @@
 - Test: `esvo2_core/test/test_float_mirrors.cpp`
 
 **Interfaces:**
-- Produces: `Eigen::MatrixXf TimeSurfaceObservation::TS_left_f_, TS_right_f_;` and `void TimeSurfaceObservation::refreshFloatMirrors();`. Also the CMake function `esvo2_core_add_lib_gtest(<name>)`, which builds `test/<name>.cpp` linked with the core library and defines `ESVO2_CORE_SOURCE_DIR`.
+- Produces: `Eigen::MatrixXf TimeSurfaceObservation::TS_left_f_, TS_right_f_;` and `void TimeSurfaceObservation::refreshFloatMirrors();`. It uses the existing CMake function `esvo2_core_add_lib_gtest(<name>)`, which builds `test/<name>.cpp` linked with the core library and defines `ESVO2_CORE_SOURCE_DIR`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -101,25 +101,15 @@ TEST(FloatMirrors, FollowTheBlur)
 
 - [ ] **Step 2: Register the test**
 
-At the end of the `if(CATKIN_ENABLE_TESTING)` block in `esvo2_core/CMakeLists.txt` (before its `endif()`), add:
+The CMake function `esvo2_core_add_lib_gtest` already exists (added with `test_depth_problem_temporal` in `2f279fd`). In `esvo2_core/CMakeLists.txt`, after `esvo2_core_add_lib_gtest(test_depth_problem_temporal)`, add:
 
 ```cmake
-  # gtest linked against the core library. ESVO2_CORE_SOURCE_DIR lets a test
-  # find calib/ and cfg/ in the source tree.
-  function(esvo2_core_add_lib_gtest name)
-    catkin_add_gtest(${name} test/${name}.cpp)
-    if(TARGET ${name})
-      target_link_libraries(${name} gtest_main ${PROJECT_NAME}_LIB
-        ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp)
-      target_compile_definitions(${name} PRIVATE ESVO2_CORE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-    endif()
-  endfunction()
   esvo2_core_add_lib_gtest(test_float_mirrors)
 ```
 
 - [ ] **Step 3: Run the test to verify it fails**
 
-Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_test_float_mirrors 2>&1 | tail -20`
+Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core >/dev/null 2>&1; cd build && make -j6 test_float_mirrors 2>&1 | grep -E 'error' ; /root/catkin_ws/devel/lib/esvo2_core/test_float_mirrors 2>&1 | tail -20`
 Expected: compile error, `'struct esvo2_core::container::TimeSurfaceObservation' has no member named 'refreshFloatMirrors'`.
 
 - [ ] **Step 4: Implement**
@@ -142,7 +132,7 @@ In `TimeSurfaceObservation.h`, directly above the line `Eigen::MatrixXd TS_left_
 
 - [ ] **Step 5: Run the test to verify it passes**
 
-Run: `cd /root/catkin_ws && catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_test_float_mirrors 2>&1 | grep -E "\[  (PASSED|FAILED) \]|tests? ran"`
+Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core >/dev/null 2>&1; cd build && make -j6 test_float_mirrors 2>&1 | grep -E 'error' ; /root/catkin_ws/devel/lib/esvo2_core/test_float_mirrors 2>&1 | grep -E "\[  (PASSED|FAILED) \]|tests? ran"`
 Expected: `[  PASSED  ] 2 tests.`
 
 - [ ] **Step 6: Commit**
@@ -387,7 +377,7 @@ std::vector<std::string> listGoldenCycles(const std::string &dir);
 
 - [ ] **Step 4: Run the test to verify it fails**
 
-Run: `cd /root/catkin_ws && catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_test_golden_capture 2>&1 | tail -20`
+Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core >/dev/null 2>&1; cd build && make -j6 test_golden_capture 2>&1 | grep -E 'error' ; /root/catkin_ws/devel/lib/esvo2_core/test_golden_capture 2>&1 | tail -20`
 Expected: link error, `undefined reference to esvo2_core::tools::writeGoldenCycle` (the header exists but the .cpp does not). CMake may instead stop earlier with a missing `src/tools/golden_capture.cpp`. Either counts as failing.
 
 - [ ] **Step 5: Implement**
@@ -614,7 +604,7 @@ std::vector<std::string> listGoldenCycles(const std::string &dir)
 
 - [ ] **Step 6: Run the test to verify it passes**
 
-Run: `cd /root/catkin_ws && catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_test_golden_capture 2>&1 | grep -E "\[  (PASSED|FAILED) \]|FAILED"`
+Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core >/dev/null 2>&1; cd build && make -j6 test_golden_capture 2>&1 | grep -E 'error' ; /root/catkin_ws/devel/lib/esvo2_core/test_golden_capture 2>&1 | grep -E "\[  (PASSED|FAILED) \]|FAILED"`
 Expected: `[  PASSED  ] 4 tests.`
 
 - [ ] **Step 7: Commit**
@@ -1115,7 +1105,7 @@ Register the test: after `esvo2_core_add_lib_gtest(test_golden_capture)` in `CMa
 
 - [ ] **Step 4: Run the test**
 
-Run: `cd /root/catkin_ws && catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_test_mapping_equivalence 2>&1 | grep -E "\[golden\]|\[  (PASSED|FAILED) \]|Failure|different config" | head -20`
+Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core >/dev/null 2>&1; cd build && make -j6 test_mapping_equivalence 2>&1 | grep -E 'error' ; /root/catkin_ws/devel/lib/esvo2_core/test_mapping_equivalence 2>&1 | grep -E "\[golden\]|\[  (PASSED|FAILED) \]|Failure|different config" | head -20`
 Expected: `[golden] N cycles, ... reproduced` and `[  PASSED  ] 1 test.`
 
 This test verifies the harness, not new code, so it should pass the first time. If it fails:
@@ -1318,7 +1308,7 @@ Register it: after `esvo2_core_add_lib_gtest(test_mapping_equivalence)` in `CMak
 
 - [ ] **Step 3: Run the test to verify it fails**
 
-Run: `cd /root/catkin_ws && catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_test_bm_float 2>&1 | grep -E "error" | head -5`
+Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core >/dev/null 2>&1; cd build && make -j6 test_bm_float 2>&1 | grep -E 'error' ; /root/catkin_ws/devel/lib/esvo2_core/test_bm_float 2>&1 | grep -E "error" | head -5`
 Expected: compile errors, `'class esvo2_core::core::EventBM' has no member named 'setUseFloat'` (and similar).
 
 - [ ] **Step 4: Declare the float path**
@@ -1675,7 +1665,7 @@ double esvo2_core::core::EventBM::zncc_cost2_f(
 
 - [ ] **Step 6: Run the unit test to verify it passes**
 
-Run: `cd /root/catkin_ws && catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_test_bm_float 2>&1 | grep -E "\[  (PASSED|FAILED) \]|Failure" | head`
+Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core >/dev/null 2>&1; cd build && make -j6 test_bm_float 2>&1 | grep -E 'error' ; /root/catkin_ws/devel/lib/esvo2_core/test_bm_float 2>&1 | grep -E "\[  (PASSED|FAILED) \]|Failure" | head`
 Expected: `[  PASSED  ] 4 tests.`
 
 If `SameDecisionAndMatchPerEvent` fails on exact equality, diff the double and float arithmetic operation by operation. The claim in the spec's planning note 3 is that they are identical. Do not loosen the test to a tolerance without finding and reporting the cause.
@@ -1756,7 +1746,7 @@ TEST(Golden, FloatBlockMatchingMeetsSpec)
 
 - [ ] **Step 8: Run all tests**
 
-Run: `cd /root/catkin_ws && catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_test_mapping_equivalence run_tests_esvo2_core_gtest_test_bm_float 2>&1 | grep -E "\[golden|\[  (PASSED|FAILED) \]|Failure" | head -20`
+Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core >/dev/null 2>&1; cd build && make -j6 test_mapping_equivalence test_bm_float 2>&1 | grep error; { /root/catkin_ws/devel/lib/esvo2_core/test_mapping_equivalence 2>&1; /root/catkin_ws/devel/lib/esvo2_core/test_bm_float 2>&1; } | grep -E "\[golden|\[  (PASSED|FAILED) \]|Failure"`
 Expected: both suites `PASSED`. `OfflineDoubleReproducesTheNode` is still green, and `[golden BM]` reports 100% same decisions with all differences 0.
 
 - [ ] **Step 9: Commit**
@@ -1868,7 +1858,7 @@ Register it: after `esvo2_core_add_lib_gtest(test_bm_float)`, add `esvo2_core_ad
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `cd /root/catkin_ws && catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_test_depth_float 2>&1 | grep error | head -3`
+Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core >/dev/null 2>&1; cd build && make -j6 test_depth_float 2>&1 | grep -E 'error' ; /root/catkin_ws/devel/lib/esvo2_core/test_depth_float 2>&1 | grep error | head -3`
 Expected: `'class esvo2_core::core::DepthProblemSolver' has no member named 'setUseFloat'`.
 
 - [ ] **Step 3: Float residual in `DepthProblem`**
@@ -2138,7 +2128,7 @@ At the top of `solve`, after the opening brace, add:
 
 - [ ] **Step 5: Run the unit test to verify it passes**
 
-Run: `cd /root/catkin_ws && catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_test_depth_float 2>&1 | grep -E "\[  (PASSED|FAILED) \]|Failure" | head`
+Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core >/dev/null 2>&1; cd build && make -j6 test_depth_float 2>&1 | grep -E 'error' ; /root/catkin_ws/devel/lib/esvo2_core/test_depth_float 2>&1 | grep -E "\[  (PASSED|FAILED) \]|Failure" | head`
 Expected: `[  PASSED  ] 2 tests.`
 
 - [ ] **Step 6: Add the golden depth equivalence test**
@@ -2212,7 +2202,7 @@ TEST(Golden, FloatDepthSolveMeetsSpec)
 
 - [ ] **Step 7: Run every esvo2_core test**
 
-Run: `cd /root/catkin_ws && catkin_make -j4 --pkg esvo2_core run_tests_esvo2_core_gtest_test_mapping_equivalence run_tests_esvo2_core_gtest_test_bm_float run_tests_esvo2_core_gtest_test_depth_float run_tests_esvo2_core_gtest_test_golden_capture run_tests_esvo2_core_gtest_test_float_mirrors run_tests_esvo2_core_gtest_test_gyro_bias run_tests_esvo2_core_gtest_test_gyro_prediction 2>&1 | grep -E "\[golden|\[  (PASSED|FAILED) \]|Failure"`
+Run: `cd /root/catkin_ws && source /opt/ros/noetic/setup.bash && catkin_make -j4 --pkg esvo2_core >/dev/null 2>&1; cd build && make -j6 test_mapping_equivalence test_bm_float test_depth_float test_golden_capture test_float_mirrors test_gyro_bias test_gyro_prediction test_depth_problem_temporal 2>&1 | grep error; { /root/catkin_ws/devel/lib/esvo2_core/test_mapping_equivalence 2>&1; /root/catkin_ws/devel/lib/esvo2_core/test_bm_float 2>&1; /root/catkin_ws/devel/lib/esvo2_core/test_depth_float 2>&1; /root/catkin_ws/devel/lib/esvo2_core/test_golden_capture 2>&1; /root/catkin_ws/devel/lib/esvo2_core/test_float_mirrors 2>&1; /root/catkin_ws/devel/lib/esvo2_core/test_gyro_bias 2>&1; /root/catkin_ws/devel/lib/esvo2_core/test_gyro_prediction 2>&1; } | grep -E "\[golden|\[  (PASSED|FAILED) \]|Failure"`
 Expected: every suite `PASSED`, including `OfflineDoubleReproducesTheNode` (which proves the `appendDepthPoint` extraction preserved the double path). `[golden depth]` should report 100% within 0.1%.
 
 - [ ] **Step 8: Commit**
@@ -2222,8 +2212,7 @@ cd /root/catkin_ws/src/ESVO2
 git add esvo2_core/include/esvo2_core/core/DepthProblem.h esvo2_core/src/core/DepthProblem.cpp esvo2_core/include/esvo2_core/core/DepthProblemSolver.h esvo2_core/src/core/DepthProblemSolver.cpp esvo2_core/test/test_depth_float.cpp esvo2_core/test/golden_harness.h esvo2_core/test/test_mapping_equivalence.cpp esvo2_core/CMakeLists.txt
 git commit -m "DepthProblemSolver: float static depth solve without per-point allocation
 
-Static (left-right) solver only; the temporal solver stays double (its
-T_last_now_ is read uninitialised upstream, see the A1 spec's planning notes).
+Static (left-right) solver only; the temporal solver stays double (A1 scope).
 The DepthPoint construction is shared by both paths.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
@@ -2526,4 +2515,4 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ## After this plan (not part of it)
 
-If the results meet the acceptance criteria, the user decides whether to flip `MAPPING_FLOAT` to `True` in the committed YAML and delete the double static BM and depth-solve paths (spec §3). The spec treats these as a follow-up commit and this plan does not include them. The temporal depth solve's uninitialised `T_last_now_` is a separate decision (spec planning note 1).
+If the results meet the acceptance criteria, the user decides whether to flip `MAPPING_FLOAT` to `True` in the committed YAML and delete the double static BM and depth-solve paths (spec §3). The spec treats these as a follow-up commit and this plan does not include them.
