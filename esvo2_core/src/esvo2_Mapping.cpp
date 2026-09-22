@@ -143,6 +143,12 @@ namespace esvo2_core
     // distance from last frame
     distance_from_last_frame_ = tools::param(pnh_, "distance_from_last_frame", 0.04);
 
+    // Golden capture for offline equivalence tests (off unless a directory is given)
+    golden_capture_dir_ = tools::param(pnh_, "golden_capture_dir", std::string(""));
+    golden_capture_every_ = std::max(1, (int)tools::param(pnh_, "golden_capture_every", 20));
+    if (!golden_capture_dir_.empty())
+      LOG(INFO) << "Golden capture every " << golden_capture_every_ << " cycles into " << golden_capture_dir_;
+
     // SGM parameters (Used by Initialization)
     num_disparities_ = BM_max_disparity_;
     block_size_ = 11;
@@ -409,6 +415,8 @@ namespace esvo2_core
     std::vector<DepthPoint> vdp, vdp_ln;
     vdp.reserve(vEMP.size() + vEMP_last.size());
     dpSolver_.solve(&vEMP, TS_obs_ptr_, vdp);
+    if (!golden_capture_dir_.empty() && golden_cycle_count_++ % golden_capture_every_ == 0)
+      captureGoldenCycle(vEMP, vdp);
     vdp_ln.reserve(vEMP_last.size());
     dpSolver_ln_.solve(&vEMP_last, TS_obs_ptr_, vdp_ln);
 
@@ -526,6 +534,67 @@ namespace esvo2_core
     LOG(INFO) << "------------------------------------------------------------";
     LOG(INFO) << "\n";
 #endif
+  }
+
+  void esvo2_Mapping::captureGoldenCycle(const std::vector<EventMatchPair> &vEMP,
+                                         const std::vector<DepthPoint> &vdp)
+  {
+    tools::GoldenConfig cfg;
+    cfg.patch_size_X = BM_patch_size_X_;
+    cfg.patch_size_Y = BM_patch_size_Y_;
+    // As configured: the constructor overwrites BM_min/max_disparity_ with the
+    // range narrowed to [invDepth_min_range_, invDepth_max_range_].
+    cfg.BM_min_disparity = tools::param(pnh_, "BM_min_disparity", 3);
+    cfg.BM_max_disparity = tools::param(pnh_, "BM_max_disparity", 40);
+    cfg.invDepth_min_range = invDepth_min_range_;
+    cfg.invDepth_max_range = invDepth_max_range_;
+    cfg.BM_step = BM_step_;
+    cfg.BM_ZNCC_Threshold = BM_ZNCC_Threshold_;
+    cfg.PROCESS_EVENT_NUM = PROCESS_EVENT_NUM_;
+    cfg.num_threads = NUM_THREAD_MAPPING;
+    cfg.LSnorm = dpConfigPtr_->LSnorm_;
+    cfg.Tdist_nu = dpConfigPtr_->td_nu_;
+    cfg.Tdist_scale = dpConfigPtr_->td_scale_;
+    cfg.calibInfoDir = calibInfoDir_;
+
+    tools::GoldenCycle c;
+    c.cycle = (int)golden_cycle_count_ - 1;
+    c.TS_left = TS_obs_ptr_->second.TS_left_;
+    c.TS_right = TS_obs_ptr_->second.TS_right_;
+    const Eigen::Quaterniond q = TS_obs_ptr_->second.tr_.getRotation().toImplementation();
+    const Eigen::Vector3d p = TS_obs_ptr_->second.tr_.getPosition();
+    c.q_wxyz = {q.w(), q.x(), q.y(), q.z()};
+    c.position = {p(0), p(1), p(2)};
+    c.events.reserve(vDenoisedEventsPtr_left_dx2_.size());
+    for (const dvs_msgs::Event *e : vDenoisedEventsPtr_left_dx2_)
+      c.events.push_back({e->x, e->y, e->ts.sec, e->ts.nsec});
+    for (const EventMatchPair &m : vEMP)
+    {
+      tools::GoldenMatch g;
+      g.x_left_raw = {m.x_left_raw_(0), m.x_left_raw_(1)};
+      g.x_left = {m.x_left_(0), m.x_left_(1)};
+      g.x_right = {m.x_right_(0), m.x_right_(1)};
+      g.invDepth = m.invDepth_;
+      g.cost = m.cost_;
+      g.disp = m.disp_;
+      c.matches.push_back(g);
+    }
+    for (const DepthPoint &d : vdp)
+    {
+      tools::GoldenDepth g;
+      g.x = {d.x()(0), d.x()(1)};
+      g.invDepth = d.invDepth();
+      g.variance = d.variance();
+      g.residual = d.residual();
+      c.depths.push_back(g);
+    }
+
+    std::string err;
+    if (tools::writeGoldenCycle(golden_capture_dir_, cfg, c, &err))
+      LOG(INFO) << "Golden capture: cycle " << c.cycle << ", " << c.events.size() << " events, "
+                << c.matches.size() << " matches, " << c.depths.size() << " depth points.";
+    else
+      LOG(ERROR) << "Golden capture failed: " << err;
   }
 
   bool esvo2_Mapping::InitializationAtTime(const ros::Time &t)

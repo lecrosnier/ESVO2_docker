@@ -22,6 +22,7 @@
 #include <esvo2_core/core/EventBM.h>
 #include <esvo2_core/tools/utils.h>
 #include <esvo2_core/tools/Visualization.h>
+#include <esvo2_core/tools/golden_capture.h>
 
 #include <dynamic_reconfigure/server.h>
 #include <esvo2_core/DVS_MappingStereoConfig.h>
@@ -122,6 +123,11 @@ namespace esvo2_core
                         vector<pair<double, Eigen::Vector3d>> &gyrVector);
     void initFirstIMUPose(vector<pair<double, Eigen::Vector3d>> &accVector);
     void processIMU(double t, double dt, const Eigen::Vector3d &linear_acceleration, const Eigen::Vector3d &angular_velocity);
+
+    // Writes this cycle's static BM / static depth-solve inputs and outputs
+    // (see tools/golden_capture.h). Called every golden_capture_every_ cycles.
+    void captureGoldenCycle(const std::vector<EventMatchPair> &vEMP,
+                            const std::vector<DepthPoint> &vdp);
 
     /************************ member variables ************************/
   private:
@@ -271,6 +277,11 @@ namespace esvo2_core
     bool initFirstPoseFlag;
     Eigen::Vector3d acc_0, gyr_0;
     std::mutex mBuf;
+
+    // Golden capture: empty dir = off.
+    std::string golden_capture_dir_;
+    int golden_capture_every_;
+    size_t golden_cycle_count_ = 0;
 
     /**********************************************************/
     /******************** For test & debug ********************/
