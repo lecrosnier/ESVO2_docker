@@ -1,6 +1,6 @@
 # A1 results: float static mapping path
 
-Date: 2026-09-22. Spec: `2026-09-22-mapping-float-a1-design.md`. Commits: `2f279fd`..`2044f19` (this working session's HEAD; results doc and eval script commit follows).
+Date: 2026-09-22. Spec: `2026-09-22-mapping-float-a1-design.md`. Commits: `2f279fd`..`6c2f62d` (final HEAD of the review fix wave; this results-doc commit follows).
 
 ## Equivalence (golden capture: 51 cycles of slide4_bias.bag, every 20th)
 
@@ -20,6 +20,7 @@ Command: `/root/catkin_ws/devel/lib/esvo2_core/test_mapping_equivalence 2>&1 | g
 - Harness reproduces the node exactly: 51 cycles, 83081 matches, 83081 depth points — pass.
 - Static BM: same decision 100.0000% (need ≥ 99%); disparity |d| max 0 px (need ≤ 1); invDepth rel max 0 (need ≤ 0.1%) — pass.
 - Static depth solve: within 0.1%: 100.0000% of 83081 points (need ≥ 99.9%); variance rel p99/max 0/0 — pass.
+- Caveat: `test_mapping_equivalence`'s three cases `GTEST_SKIP()` whenever `/root/datasets/evk4/golden/slide4_bias` is absent, so a green run on a machine without that golden capture proves nothing about equivalence — it only means the equivalence assertions did not run. The numbers above are from a run where the golden data was present and the assertions actually executed.
 
 ## Benchmark (5 repetitions, idle machine)
 
@@ -101,9 +102,9 @@ Float back legs: 0.534, 0.633, 0.639, 0.677, 0.724 m, mean 0.641 m, sd 0.070, n=
 
 Late starts (own line, per the controller ruling): float 5/5 runs, double path 6/8 runs (75%) on 2026-09-22 — the same known issue, independent of A1, not scored against either criterion.
 
-**Overall tracking verdict: indistinguishable from the double path.** The apparent "back leg is 63–76%, out leg is missing" pattern in every float run is the well-documented late-start issue, reproduced here at a similar rate to the double path on the same day, not a new float-specific failure.
+**Overall tracking verdict: indistinguishable from the double path.** The apparent "back leg is 53–72%, out leg is missing" pattern in every float run (back legs 53.4–72.4%, run2 at 53.4% the low end) is the well-documented late-start issue, reproduced here at a similar rate to the double path on the same day (5/5 vs 6/8), not a new float-specific failure.
 
-For the A2 decision: equivalence is met exactly (100.0000% match on 51 cycles / 83081 points), the benchmark shows a real but modest speedup on the two stages this task touches (static BM 1.30x aggregate / 1.33x paired median; static depth solve 1.05x aggregate / 1.07x paired median — A2's further speedups matter more for depth solve than for BM), and tracking with `MAPPING_FLOAT: True` is indistinguishable from the double path on the same bag and configs on 2026-09-22 (back-leg mean 0.641 m float, n=5, vs 0.615 m double, n=8; Welch t=0.78, not significant; same late-start rate). All three acceptance areas support proceeding with A2 and, separately, support flipping `MAPPING_FLOAT` to `True` in the committed YAML per the spec's follow-up.
+For the A2 decision: equivalence is met exactly (100.0000% match on 51 cycles / 83081 points), the benchmark shows a real but modest speedup on the two stages this task touches (static BM 1.30x aggregate / 1.33x paired median; static depth solve 1.05x aggregate / 1.07x paired median — A2's further speedups matter more for depth solve than for BM), and tracking with `MAPPING_FLOAT: True` is indistinguishable from the double path on the same bag and configs on 2026-09-22 (back-leg mean 0.641 m float, n=5, vs 0.615 m double, n=8; Welch t=0.78, not significant; similar late-start rate, 5/5 vs 6/8). All three acceptance areas support proceeding with A2. Flipping `MAPPING_FLOAT` to `True` in the committed YAML per the spec's follow-up is a separate recommendation, subject to the user accepting Ruling R1's criterion (b); the spec's own band (a) was not met by either path on 2026-09-22.
 
 ## Findings
 
