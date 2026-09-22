@@ -441,6 +441,7 @@ int DepthProblem::residualsFloat(double invDepth, double *fvec) const
   const size_t wx = dpConfigPtr_->patchSize_X_;
   const size_t wy = dpConfigPtr_->patchSize_Y_;
   const size_t patchSize = wx * wy;
+  if (patchSize > kMaxPatchArea) LOG(FATAL) << "MAPPING_FLOAT: depth patch " << wx << "x" << wy << " exceeds kMaxPatchArea (" << kMaxPatchArea << ") stack buffers in residualsFloat.";
   const bool l2 = dpConfigPtr_->LSnorm_ == "l2";
   Eigen::Vector2d x1_s, x2_s;
   double tau1[kMaxPatchArea], tau2[kMaxPatchArea];

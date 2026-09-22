@@ -281,7 +281,7 @@ namespace esvo2_core
 
     // Golden capture: empty dir = off.
     std::string golden_capture_dir_;
-    int golden_capture_every_;
+    int golden_capture_every_ = 20;
     size_t golden_cycle_count_ = 0;
 
     /**********************************************************/

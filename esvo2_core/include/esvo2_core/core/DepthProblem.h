@@ -99,6 +99,11 @@ struct DepthProblem : public factor::OptimizationFunctor<double>
   // Same residual as operator() for LSnorm Tdist and l2, reading
   // TimeSurfaceObservation::TS_left_f_ / TS_right_f_; writes wx*wy values to
   // fvec and allocates nothing.
+  // Size of the residualsFloat / init_single_point_f stack buffers (tau1,
+  // tau2, val1, val2, ...), not a float-exactness bound. The float-exactness
+  // bound for summed 8-bit pixel values is EventBM::floatSumsAreExact
+  // (258 px); this is unrelated and just needs to be >= the configured
+  // patch area, checked in DepthProblemSolver::setUseFloat.
   static constexpr size_t kMaxPatchArea = 256;
   int residualsFloat(double invDepth, double *fvec) const;
   // Bilinear patch of wy x wx around location, row-major into patch[y*wx + x].

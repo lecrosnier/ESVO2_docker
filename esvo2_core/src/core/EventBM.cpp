@@ -1194,6 +1194,7 @@ bool esvo2_core::core::EventBM::match_an_event2_f(
   const ConstPatchF strip = TS_right.block(x1_left_top(1), x1_left_top(0) - (int)upDisparity,
                                            patch_size_Y_, patch_size_X_ + upDisparity);
   const size_t nColSum = strip.cols();
+  if (nColSum > (size_t)s.colSum.size()) LOG(FATAL) << "MAPPING_FLOAT: strip width " << nColSum << " exceeds prepared scratch colSum size " << s.colSum.size() << ".";
   s.colSum.head(nColSum).noalias() = strip.colwise().sum().transpose();
   s.colSquareSum.head(nColSum).noalias() = strip.array().square().colwise().sum().matrix().transpose();
   double Tr = 0, Tr_square = 0;

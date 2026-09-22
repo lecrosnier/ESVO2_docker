@@ -294,6 +294,7 @@ bool DepthProblemSolver::init_single_point_f(
   constStampedTimeSurfaceObs* pStampedTsObs = job.pStamped_TS_obs_;
   Eigen::Matrix<double, 4, 4> T_world_virtual = pStampedTsObs->second.tr_.getTransformationMatrix();
   const size_t n = dpConfigPtr_->patchSize_X_ * dpConfigPtr_->patchSize_Y_;
+  if (n > DepthProblem::kMaxPatchArea) LOG(FATAL) << "MAPPING_FLOAT: depth patch " << n << " px exceeds kMaxPatchArea (" << DepthProblem::kMaxPatchArea << ") stack buffers in init_single_point_f.";
   alignas(16) double val1[DepthProblem::kMaxPatchArea], val2[DepthProblem::kMaxPatchArea];
   Eigen::Map<const Eigen::VectorXd, Eigen::Aligned16> v1(val1, n), v2(val2, n);
   for(size_t i = i_thread; i < numEvent; i+=NUM_THREAD_)
