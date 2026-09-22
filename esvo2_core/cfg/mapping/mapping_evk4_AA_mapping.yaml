@@ -48,8 +48,14 @@ Tdist_stdvar_ln: 59.763
 
 # Configuration for point sampling
 Denoising: False
-PROCESS_EVENT_NUM: 10000 #20000
-PROCESS_EVENT_NUM_AA: 10000 #20000
+# 4000 for the live EVK4 rig (was 10000): block matching and the variance
+# step scale with it, and at 10000 mapping overruns its 40 ms budget. Measured
+# 2026-09-22 on slide4_bias.bag at 1x, lock on, regularization off:
+#   10000: cycle  80 ms   6000: 68 ms   4000: 52 ms   2500: 42 ms but tracking
+#   reset 162 times (map too sparse). At 4000 a 1 m out-and-back slide recovers
+#   63-76% per leg over three runs, matching 0.25x replay with 10000.
+PROCESS_EVENT_NUM: 4000 #20000
+PROCESS_EVENT_NUM_AA: 4000 #20000
 x_patches: 8 
 y_patches: 6 
 select_points_from_AA: True
