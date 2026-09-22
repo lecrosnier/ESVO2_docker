@@ -1290,8 +1290,10 @@ namespace esvo2_core
         sor.filter(*pc_filtered);
 
         // copy the most current pc tp pc_global
+        // An empty filtered cloud (e.g. right after a tracking reset) made
+        // numAddedPC underflow to SIZE_MAX and the insert throw length_error.
         size_t pc_length = pc_filtered->size();
-        size_t numAddedPC = min(pc_length, numAddedPC_threshold_) - 1;
+        size_t numAddedPC = pc_length == 0 ? 0 : min(pc_length, numAddedPC_threshold_) - 1;
         pc_global_->insert(pc_global_->end(), pc_filtered->end() - numAddedPC, pc_filtered->end());
         pcl::PCDWriter writer;
 
