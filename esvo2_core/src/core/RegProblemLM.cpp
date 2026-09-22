@@ -5,6 +5,9 @@
 
 namespace esvo2_core
 {
+  // Below this many points per thread, evaluate inline instead of spawning.
+  static const size_t kMinPointsPerThread = 500;
+
 namespace core
 {
 RegProblemLM::RegProblemLM(
@@ -110,12 +113,22 @@ int RegProblemLM::operator()(const Eigen::Matrix<double,6,1>& x, Eigen::VectorXd
     jobs[i].i_thread_ = i;
   }
 
-  std::vector<std::thread> threads;
-  for(size_t i = 0; i < NUM_THREAD_; i++)
-    threads.emplace_back(std::bind(&RegProblemLM::thread, this, jobs[i]));
-  for( auto& thread : threads)
-    if(thread.joinable())
-      thread.join();
+  // Spawning threads costs more than the work itself for a small batch: the
+  // solver calls this ~25 times per frame with BATCH_SIZE points.
+  if(ResItemsStochSampled_.size() <= kMinPointsPerThread * NUM_THREAD_)
+  {
+    for(size_t i = 0; i < NUM_THREAD_; i++)
+      thread(jobs[i]);
+  }
+  else
+  {
+    std::vector<std::thread> threads;
+    for(size_t i = 0; i < NUM_THREAD_; i++)
+      threads.emplace_back(std::bind(&RegProblemLM::thread, this, jobs[i]));
+    for( auto& thread : threads)
+      if(thread.joinable())
+        thread.join();
+  }
 
   // assign the reweighted residual to fvec
   if(strcmp(rpConfigPtr_->LSnorm_.c_str(), "l2") == 0)

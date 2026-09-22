@@ -1,4 +1,5 @@
 #include <esvo2_core/core/RegProblemSolverLM.h>
+#include <chrono>
 #include <esvo2_core/tools/cayley.h>
 
 namespace esvo2_core
@@ -134,7 +135,9 @@ bool RegProblemSolverLM::solve_numerical()
     nfev += lm.nfev;
 
     /*************************** Visualization ************************/
-    if(bVisualize_)// will slow down the tracker's performance a little bit
+    // Skipped when nobody subscribes: the reprojection map is a full frame of
+  // work (11 ms per solve at 1280x720), and it is a debug view.
+  if(bVisualize_ && reprojMap_pub_ && reprojMap_pub_->getNumSubscribers() > 0)
     {
       size_t width = camSysPtr_->cam_left_ptr_->width_;
       size_t height = camSysPtr_->cam_left_ptr_->height_;
@@ -208,7 +211,9 @@ bool RegProblemSolverLM::solve_analytical()
   }
 
   /*************************** Visualization ************************/
-  if(bVisualize_) // will slow down the tracker a little bit
+  // Skipped when nobody subscribes: the reprojection map is a full frame of
+  // work (11 ms per solve at 1280x720), and it is a debug view.
+  if(bVisualize_ && reprojMap_pub_ && reprojMap_pub_->getNumSubscribers() > 0)
   {
     size_t width = camSysPtr_->cam_left_ptr_->width_;
     size_t height = camSysPtr_->cam_left_ptr_->height_;
