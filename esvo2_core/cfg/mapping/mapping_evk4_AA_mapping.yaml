@@ -86,5 +86,15 @@ visualize_range: 30
 TS_HISTORY_LENGTH: 100
 USE_IMU: False
 INIT_SGM_DP_NUM_THRESHOLD: 500
+# SGM seeds the map at initialization. At full resolution over the whole
+# disparity range it took ~2 s per attempt on this rig (1280x720), so at 1x the
+# system needed 25-30 s to initialize and missed the start of a motion. At half
+# resolution an attempt takes ~0.1 s and initialization succeeds in two tries;
+# the seed is only sampled at event pixels, so the coarser map is enough.
+SGM_DOWNSAMPLE: 2
+# Mapping's block matching and depth solve thread count (default 4). The laptop
+# has 12 cores and mapping is the cycle that overruns: 8 cut block matching from
+# ~28 to ~24 ms at 1x.
+NUM_THREAD_MAPPING: 8
 mapping_rate_hz: 20
 large_scale: True

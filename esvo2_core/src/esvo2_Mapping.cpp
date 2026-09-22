@@ -1,4 +1,5 @@
 #include <esvo2_core/esvo2_Mapping.h>
+#include <chrono>
 #include <esvo2_core/DVS_MappingStereoConfig.h>
 #include <esvo2_core/tools/params_helper.h>
 #include <esvo2_core/factor/pose_local_parameterization.h>
@@ -53,7 +54,7 @@ namespace esvo2_core
             tools::param(pnh_, "RegularizationRadius", 5),
             tools::param(pnh_, "RegularizationMinNeighbours", 8),
             tools::param(pnh_, "RegularizationMinCloseNeighbours", 8))),
-        dpSolver_(camSysPtr_, dpConfigPtr_, NUMERICAL, NUM_THREAD_MAPPING, true),
+        dpSolver_(camSysPtr_, dpConfigPtr_, NUMERICAL, tools::param(pnh_, "NUM_THREAD_MAPPING", NUM_THREAD_MAPPING), true),
         dFusor_(camSysPtr_, dpConfigPtr_),
         dRegularizor_(dpConfigPtr_),
         dpConfigPtr_ln_(new DepthProblemConfig(
@@ -66,10 +67,10 @@ namespace esvo2_core
             tools::param(pnh_, "RegularizationRadius", 5),
             tools::param(pnh_, "RegularizationMinNeighbours", 8),
             tools::param(pnh_, "RegularizationMinCloseNeighbours", 8))),
-        dpSolver_ln_(camSysPtr_, dpConfigPtr_ln_, NUMERICAL, NUM_THREAD_MAPPING, false),
+        dpSolver_ln_(camSysPtr_, dpConfigPtr_ln_, NUMERICAL, tools::param(pnh_, "NUM_THREAD_MAPPING", NUM_THREAD_MAPPING), false),
         dFusor_ln_(camSysPtr_, dpConfigPtr_ln_),
         dRegularizor_ln_(dpConfigPtr_ln_),
-        ebm_(camSysPtr_, NUM_THREAD_MAPPING, tools::param(pnh_, "SmoothTimeSurface", false)),
+        ebm_(camSysPtr_, tools::param(pnh_, "NUM_THREAD_MAPPING", NUM_THREAD_MAPPING), tools::param(pnh_, "SmoothTimeSurface", false)),
         pc_near_(new PointCloud()),
         pc_global_(new PointCloud()),
         depthFramePtr_(new DepthFrame(camSysPtr_->cam_left_ptr_->height_, camSysPtr_->cam_left_ptr_->width_)),
@@ -149,20 +150,31 @@ namespace esvo2_core
     if (!golden_capture_dir_.empty())
       LOG(INFO) << "Golden capture every " << golden_capture_every_ << " cycles into " << golden_capture_dir_;
 
-    // SGM parameters (Used by Initialization)
-    num_disparities_ = BM_max_disparity_;
-    block_size_ = 11;
-    P1_ = 8 * 1 * block_size_ * block_size_;
-    P2_ = 32 * 1 * block_size_ * block_size_;
-    uniqueness_ratio_ = 11;
-    sgbm_ = cv::StereoSGBM::create(0, num_disparities_, block_size_, P1_, P2_,
-                                   -1, 0, uniqueness_ratio_);
-
     // calcualte the min,max disparity of static block matching
     const std::pair<size_t, size_t> dispRange = EventBM::disparityRange(
         *camSysPtr_, invDepth_min_range_, invDepth_max_range_, BM_min_disparity_, BM_max_disparity_);
     size_t minDisparity = dispRange.first;
     size_t maxDisparity = dispRange.second;
+
+    // SGM parameters (Used by Initialization)
+    // SGM costs width * height * disparities, and it ran over the full frame
+    // and the whole 0..BM_max_disparity range: 2 s per attempt at 1280x720 with
+    // 320 disparities, so at 1x the system needed tens of seconds to
+    // initialise. It searches the same range as the block matcher now, and
+    // SGM_DOWNSAMPLE halves (or quarters) the resolution it runs at; the
+    // disparity map is only sampled at event pixels to seed the map.
+    block_size_ = 11;
+    P1_ = 8 * 1 * block_size_ * block_size_;
+    P2_ = 32 * 1 * block_size_ * block_size_;
+    uniqueness_ratio_ = 11;
+    sgm_downsample_ = std::max(1, tools::param(pnh_, "SGM_DOWNSAMPLE", 1));
+    const int sgmMin = ((int)minDisparity / sgm_downsample_ / 16) * 16;
+    const int sgmMax = (int)maxDisparity / sgm_downsample_;
+    num_disparities_ = std::max(16, ((sgmMax - sgmMin + 15) / 16) * 16);
+    sgbm_ = cv::StereoSGBM::create(sgmMin, num_disparities_, block_size_, P1_, P2_,
+                                   -1, 0, uniqueness_ratio_);
+    LOG(INFO) << "SGM: disparities " << sgmMin << ".." << sgmMin + num_disparities_
+              << " at 1/" << sgm_downsample_ << " resolution";
 
     // Backend parameters
     initFirstPoseFlag = false;
@@ -561,7 +573,7 @@ namespace esvo2_core
     cfg.BM_step = BM_step_;
     cfg.BM_ZNCC_Threshold = BM_ZNCC_Threshold_;
     cfg.PROCESS_EVENT_NUM = PROCESS_EVENT_NUM_;
-    cfg.num_threads = NUM_THREAD_MAPPING;
+    cfg.num_threads = tools::param(pnh_, "NUM_THREAD_MAPPING", NUM_THREAD_MAPPING);
     cfg.LSnorm = dpConfigPtr_->LSnorm_;
     cfg.Tdist_nu = dpConfigPtr_->td_nu_;
     cfg.Tdist_scale = dpConfigPtr_->td_scale_;
@@ -617,9 +629,17 @@ namespace esvo2_core
     depthFramePtr_ = depthFramePtr_new;
 
     // call SGM on the current Time Surface observation pair.
-    cv::Mat dispMap, dispMap8;
-    sgbm_->compute(TS_obs_ptr_->second.cvImagePtr_left_->image, TS_obs_ptr_->second.cvImagePtr_right_->image, dispMap);
-    dispMap.convertTo(dispMap8, CV_8U, 255 / (num_disparities_ * 16.));
+    cv::Mat dispMap;
+    if (sgm_downsample_ > 1)
+    {
+      cv::Mat left_small, right_small;
+      const double scale = 1.0 / sgm_downsample_;
+      cv::resize(TS_obs_ptr_->second.cvImagePtr_left_->image, left_small, cv::Size(), scale, scale, cv::INTER_AREA);
+      cv::resize(TS_obs_ptr_->second.cvImagePtr_right_->image, right_small, cv::Size(), scale, scale, cv::INTER_AREA);
+      sgbm_->compute(left_small, right_small, dispMap);
+    }
+    else
+      sgbm_->compute(TS_obs_ptr_->second.cvImagePtr_left_->image, TS_obs_ptr_->second.cvImagePtr_right_->image, dispMap);
 
     // get the event map (binary mask)
     cv::Mat edgeMap;
@@ -636,7 +656,7 @@ namespace esvo2_core
       size_t x = vEdgeletCoordinates[i].first;
       size_t y = vEdgeletCoordinates[i].second;
 
-      double disp = dispMap.at<short>(y, x) / 16.0;
+      double disp = dispMap.at<short>(y / sgm_downsample_, x / sgm_downsample_) / 16.0 * sgm_downsample_;
       if (disp < 0)
         continue;
       DepthPoint dp(x, y);
@@ -1187,10 +1207,15 @@ namespace esvo2_core
     // (including being pointed at a local stack variable as a sentinel),
     // and this function runs on a detached thread, so reading TS_obs_ptr_
     // here raced against that mutation and segfaulted intermittently.
-    invDepthImage = TS_left_image.clone();
-    visualizor_.plot_map(depthMapPtr, tools::InvDepthMap, invDepthImage,
-                         invDepth_max_range_, invDepth_min_range_, stdVar_vis_threshold_, age_vis_threshold_);
-    publishImage(invDepthImage, t, invDepthMap_pub_);
+    // Only when someone is looking: colouring the whole frame and publishing it
+    // costs CPU the mapping cycle needs (it already overruns its budget at 1x).
+    if (invDepthMap_pub_.getNumSubscribers() > 0)
+    {
+      invDepthImage = TS_left_image.clone();
+      visualizor_.plot_map(depthMapPtr, tools::InvDepthMap, invDepthImage,
+                           invDepth_max_range_, invDepth_min_range_, stdVar_vis_threshold_, age_vis_threshold_);
+      publishImage(invDepthImage, t, invDepthMap_pub_);
+    }
 
     if (ESVO2_System_Status_ == "INITIALIZATION")
       publishPointCloud(depthMapPtr, tr, t);
@@ -1220,12 +1245,19 @@ namespace esvo2_core
     sensor_msgs::PointCloud2::Ptr pc_to_publish(new sensor_msgs::PointCloud2);
     Eigen::Matrix<double, 4, 4> T_world_result = tr.getTransformationMatrix();
 
+    // pc_color_ feeds the tracker, so it is always built. The other two are
+    // visualisation: the filtered cloud only if something subscribes, the near
+    // cloud only if the global map is on.
+    const bool bWantFiltered = pc_filtered_pub_.getNumSubscribers() > 0;
+    const bool bWantNear = bVisualizeGlobalPC_;
     pc_color_->clear();
     pc_color_->reserve(depthMapPtr->size());
     pc_filtered_->clear();
-    pc_filtered_->reserve(depthMapPtr->size());
     pc_near_->clear();
-    pc_near_->reserve(depthMapPtr->size());
+    if (bWantFiltered)
+      pc_filtered_->reserve(depthMapPtr->size());
+    if (bWantNear)
+      pc_near_->reserve(depthMapPtr->size());
 
     double FarthestDistance = 0.0;
     Eigen::Vector3d FarthestPoint;
@@ -1252,8 +1284,9 @@ namespace esvo2_core
       if (it->valid() && it->variance() < pow(stdVar_vis_threshold_, 2) && it->age() >= (int)age_vis_threshold_)
       {
         point.label = 1;
-        pc_filtered_->push_back(point);
-        if (it->p_cam().norm() < visualize_range_)
+        if (bWantFiltered)
+          pc_filtered_->push_back(point);
+        if (bWantNear && it->p_cam().norm() < visualize_range_)
           pc_near_->push_back(pcl::PointXYZ(p_world(0), p_world(1), p_world(2)));
       }
       else

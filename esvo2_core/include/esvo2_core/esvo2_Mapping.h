@@ -265,6 +265,7 @@ namespace esvo2_core
 
     // SGM parameters (Used by Initialization)
     int num_disparities_;
+    int sgm_downsample_;
     int block_size_;
     int P1_;
     int P2_;
