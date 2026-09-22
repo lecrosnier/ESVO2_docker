@@ -20,11 +20,12 @@ int main(int argc, char **argv)
     return 1;
   }
 
-  std::vector<double> bm[2], dp[2], mirror;
+  std::vector<double> bm[2], dp[2], mirror, bm_ratios, dp_ratios;
   size_t events = 0, matches = 0;
   for (int rep = 0; rep < reps; rep++)
-    for (const std::string &file : files)
+    for (size_t idx = 0; idx < files.size(); idx++)
     {
+      const std::string &file = files[idx];
       tools::GoldenConfig cfg;
       tools::GoldenCycle c;
       std::string err;
@@ -37,7 +38,12 @@ int main(int argc, char **argv)
       std::unique_ptr<constStampedTimeSurfaceObs> obs = makeObservation(c);
       std::vector<dvs_msgs::Event> evs = makeEvents(c);
       std::vector<dvs_msgs::Event *> ptrs = pointersTo(evs);
-      for (int f = 0; f < 2; f++)
+
+      // Alternate order: even cycles run double then float, odd cycles run float then double
+      std::vector<int> order = (idx % 2 == 0) ? std::vector<int>{0, 1} : std::vector<int>{1, 0};
+      double bm_times[2], dp_times[2];
+
+      for (int f : order)
       {
         std::unique_ptr<core::EventBM> m = off.makeBM(f == 1);
         std::unique_ptr<core::DepthProblemSolver> s = off.makeSolver(f == 1);
@@ -46,16 +52,25 @@ int main(int argc, char **argv)
         tools::TicToc t;
         m->createMatchProblem(obs.get(), nullptr, &ptrs); // float: includes refreshing the mirrors
         m->match_all_HyperThread(vEMP);
-        bm[f].push_back(t.toc());
+        bm_times[f] = t.toc();
+        bm[f].push_back(bm_times[f]);
         t.tic();
         s->solve(&vEMP, obs.get(), vdp);
-        dp[f].push_back(t.toc());
+        dp_times[f] = t.toc();
+        dp[f].push_back(dp_times[f]);
         if (rep == 0 && f == 0)
         {
           events += ptrs.size();
           matches += vEMP.size();
         }
       }
+
+      // Record paired ratios (double / float)
+      if (bm_times[1] > 0)
+        bm_ratios.push_back(bm_times[0] / bm_times[1]);
+      if (dp_times[1] > 0)
+        dp_ratios.push_back(dp_times[0] / dp_times[1]);
+
       tools::TicToc t;
       obs->second.refreshFloatMirrors();
       mirror.push_back(t.toc());
@@ -75,5 +90,10 @@ int main(int argc, char **argv)
   }
   std::printf("| float mirror refresh (ms, inside float BM) | - | - | %.2f | %.2f | - |\n",
               percentile(mirror, 0.5), percentile(mirror, 0.9));
+
+  std::printf("\npaired per-cycle speedup, static BM: median %.2fx, p10 %.2fx, p90 %.2fx\n",
+              percentile(bm_ratios, 0.5), percentile(bm_ratios, 0.1), percentile(bm_ratios, 0.9));
+  std::printf("paired per-cycle speedup, static depth solve: median %.2fx, p10 %.2fx, p90 %.2fx\n",
+              percentile(dp_ratios, 0.5), percentile(dp_ratios, 0.1), percentile(dp_ratios, 0.9));
   return 0;
 }
