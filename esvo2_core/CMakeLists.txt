@@ -61,6 +61,7 @@ set(HEADERS
   include/esvo2_core/tools/sobel.h
   include/esvo2_core/tools/cayley.h
   include/esvo2_core/tools/params_helper.h
+  include/esvo2_core/tools/golden_capture.h
 
   include/esvo2_core/factor/utility.h
 
@@ -82,10 +83,11 @@ set(SOURCES
   src/tools/Visualization.cpp
   src/tools/sobel.cpp
   src/tools/cayley.cpp
+  src/tools/golden_capture.cpp
   )
 
 cs_add_library(${PROJECT_NAME}_LIB ${SOURCES} ${HEADERS})
-target_link_libraries(${PROJECT_NAME}_LIB ${CERES_LIBRARIES})
+target_link_libraries(${PROJECT_NAME}_LIB ${CERES_LIBRARIES} ${OpenCV_LIBRARIES})
 
 
 # Node esvo2_Mapping
@@ -123,4 +125,5 @@ if(CATKIN_ENABLE_TESTING)
   endfunction()
   esvo2_core_add_lib_gtest(test_depth_problem_temporal)
   esvo2_core_add_lib_gtest(test_float_mirrors)
+  esvo2_core_add_lib_gtest(test_golden_capture)
 endif()
