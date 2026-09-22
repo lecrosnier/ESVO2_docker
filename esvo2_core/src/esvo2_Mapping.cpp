@@ -159,12 +159,10 @@ namespace esvo2_core
                                    -1, 0, uniqueness_ratio_);
 
     // calcualte the min,max disparity of static block matching
-    double f = (camSysPtr_->cam_left_ptr_->P_(0, 0) + camSysPtr_->cam_left_ptr_->P_(1, 1)) / 2;
-    double b = camSysPtr_->baseline_;
-    size_t minDisparity = max(size_t(std::floor(f * b * invDepth_min_range_)), (size_t)0);
-    size_t maxDisparity = size_t(std::ceil(f * b * invDepth_max_range_));
-    minDisparity = max(minDisparity, BM_min_disparity_);
-    maxDisparity = min(maxDisparity, BM_max_disparity_);
+    const std::pair<size_t, size_t> dispRange = EventBM::disparityRange(
+        *camSysPtr_, invDepth_min_range_, invDepth_max_range_, BM_min_disparity_, BM_max_disparity_);
+    size_t minDisparity = dispRange.first;
+    size_t maxDisparity = dispRange.second;
 
     // Backend parameters
     initFirstPoseFlag = false;

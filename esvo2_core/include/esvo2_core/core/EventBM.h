@@ -58,6 +58,13 @@ public:
     size_t patch_size_X_2 = 5,
     size_t patch_size_Y_2 = 31);
 
+  // Static BM disparity search range: the depth range [1/invDepth_max_range,
+  // 1/invDepth_min_range] converted to disparity with this camera system,
+  // clipped to [BM_min_disparity, BM_max_disparity].
+  static std::pair<size_t, size_t> disparityRange(
+    const CameraSystem &cam, double invDepth_min_range, double invDepth_max_range,
+    size_t BM_min_disparity, size_t BM_max_disparity);
+
   void createMatchProblem(
     constStampedTimeSurfaceObs * pStampedTsObs,
     StampTransformationMap * pSt_map,

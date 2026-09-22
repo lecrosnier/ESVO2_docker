@@ -63,6 +63,19 @@ void esvo2_core::core::EventBM::resetParameters(
   outsideNum_ = 0;
 }
 
+std::pair<size_t, size_t> esvo2_core::core::EventBM::disparityRange(
+  const CameraSystem &cam, double invDepth_min_range, double invDepth_max_range,
+  size_t BM_min_disparity, size_t BM_max_disparity)
+{
+  double f = (cam.cam_left_ptr_->P_(0, 0) + cam.cam_left_ptr_->P_(1, 1)) / 2;
+  double b = cam.baseline_;
+  size_t minDisparity = std::max(size_t(std::floor(f * b * invDepth_min_range)), (size_t)0);
+  size_t maxDisparity = size_t(std::ceil(f * b * invDepth_max_range));
+  minDisparity = std::max(minDisparity, BM_min_disparity);
+  maxDisparity = std::min(maxDisparity, BM_max_disparity);
+  return {minDisparity, maxDisparity};
+}
+
 void esvo2_core::core::EventBM::createMatchProblem(
   constStampedTimeSurfaceObs * pStampedTsObs,
   StampTransformationMap * pSt_map,
