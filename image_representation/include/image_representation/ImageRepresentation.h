@@ -90,7 +90,7 @@ namespace image_representation
     bool loadCalibInfo(const std::string &cameraSystemDir, bool &is_left);
     void clearEvents(int distance, std::vector<dvs_msgs::Event>::iterator ptr_e);
 
-    void AA_thread(int distance, double external_t);
+    void AA_thread(const std::vector<dvs_msgs::Event> &events, double external_t);
     void sobel(double external_t);
     bool fileExists(const std::string &filename);
     // tests
@@ -139,6 +139,11 @@ namespace image_representation
     // This cycle's events, taken out of vEvents_ under data_mutex_. Only the
     // generation thread (and the AA thread it joins) touches it.
     std::vector<dvs_msgs::Event> vBatch_;
+    // Events the AA map is built from. With aa_window_s_ > 0 this is a sliding
+    // window of the last aa_window_s_ seconds of events; otherwise it is vBatch_.
+    // Generation thread only, like vBatch_.
+    std::vector<dvs_msgs::Event> vAAWindow_;
+    double aa_window_s_;
 
     cv::Mat representation_TS_;
     cv::Mat representation_AA_;

@@ -57,6 +57,12 @@ namespace image_representation
     nh_private.param<int>("x_patches", x_patches_, 8); // patch of AA
     nh_private.param<int>("y_patches", y_patches_, 6);
     nh_private.param<int>("generation_rate_hz", generation_rate_hz_, 100);
+    // The AA map (and the mapping candidates sampled from it) otherwise covers only
+    // the events since the previous render, i.e. 1/generation_rate_hz seconds, so a
+    // higher rate thins it out. A fixed window keeps it independent of the rate.
+    double aa_window_ms;
+    nh_private.param<double>("aa_window_ms", aa_window_ms, 0.0);
+    aa_window_s_ = aa_window_ms / 1000.0;
     nh_private.param("calibInfoDir", calibInfoDir_, std::string("path is not given"));
     if (!loadCalibInfo(calibInfoDir_, is_left_))
     {
@@ -111,7 +117,7 @@ namespace image_representation
     }
   }
 
-  void ImageRepresentation::AA_thread(int distance, double external_t)
+  void ImageRepresentation::AA_thread(const std::vector<dvs_msgs::Event> &events, double external_t)
   {
     ros::Time external_sync_time(external_t);
 
@@ -129,7 +135,7 @@ namespace image_representation
     // std::vector<int> nums_temp(x_patches_ * y_patches_, 0);
     int nums_EQ = 0;
     // calculate the final activity by all events, also can be estimated by eq. 3 in the paper
-    for (auto it = vBatch_.begin(); it != vBatch_.end(); it++)
+    for (auto it = events.begin(); it != events.end(); it++)
     {
       dvs_msgs::Event e = *it;
       int y = e.y / (int)ceil((double)sensor_size_.height / (double)y_patches_);
@@ -147,7 +153,7 @@ namespace image_representation
     std::fill(beta.begin(), beta.end(), 0);
     std::fill(last_event_time.begin(), last_event_time.end(), 0);
     // Walk this cycle's events newest-first. (An older version started at the sync-time iterator itself, which is end() whenever every buffered event predates the sync time.)
-    for (auto rit = vBatch_.rbegin(); rit != vBatch_.rend(); ++rit) // traverse events in reverse to accumulate the latest events
+    for (auto rit = events.rbegin(); rit != events.rend(); ++rit) // traverse events in reverse to accumulate the latest events
     {
       dvs_msgs::Event e = *rit;
       int y = e.y / (int)ceil((double)sensor_size_.height / (double)y_patches_);
@@ -226,9 +232,19 @@ namespace image_representation
       clearEvents(distance, ptr_e);
       lock.unlock();
 
+      const std::vector<dvs_msgs::Event> *aa_events = &vBatch_;
+      if (aa_window_s_ > 0)
+      {
+        vAAWindow_.insert(vAAWindow_.end(), vBatch_.begin(), vBatch_.end());
+        auto keep = std::lower_bound(vAAWindow_.begin(), vAAWindow_.end(), external_t - aa_window_s_,
+                                     [](const dvs_msgs::Event &e, double t) { return e.ts.toSec() < t; });
+        vAAWindow_.erase(vAAWindow_.begin(), keep);
+        aa_events = &vAAWindow_;
+      }
+
       if (is_left_)   // generate AA and TS in parallel, just for left camera
       {
-        std::thread thread0(&ImageRepresentation::AA_thread, this, distance, external_t);
+        std::thread thread0(&ImageRepresentation::AA_thread, this, std::cref(*aa_events), external_t);
         representation_TS_.setTo(cv::Scalar(0));
         cv::Mat TS_img = cv::Mat::zeros(sensor_size_, CV_64F);
 
