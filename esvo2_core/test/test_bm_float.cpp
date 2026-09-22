@@ -79,6 +79,51 @@ TEST(BmFloat, CreateMatchProblemRefreshesTheMirrors)
   EXPECT_TRUE((sc.obs->second.TS_right_f_.cast<double>().array() == sc.obs->second.TS_right_.array()).all());
 }
 
+static cv_bridge::CvImagePtr randomMono8(int rows, int cols, int seed)
+{
+  cv_bridge::CvImagePtr p(new cv_bridge::CvImage);
+  p->encoding = "mono8";
+  p->image = cv::Mat(rows, cols, CV_8UC1);
+  cv::RNG rng(seed);
+  rng.fill(p->image, cv::RNG::UNIFORM, 0, 256);
+  return p;
+}
+
+// Regression test (A1 fix round 2, finding 2): createMatchProblem must blur
+// the observation's cvImagePtr_left_/right_ (when bSmoothTS_) BEFORE it
+// refreshes the float mirrors, so the float path never reads stale
+// (pre-blur) TS_left_f_/TS_right_f_. Uses the (left, right, id,
+// bCalcTsGradient) constructor, which sets cvImagePtr_left_/right_, on
+// random 8-bit texture so the blur visibly changes the surface.
+TEST(BmFloat, CreateMatchProblemRefreshesTheMirrorsAfterTheBlur)
+{
+  using namespace esvo2_core::container;
+  cv_bridge::CvImagePtr l = randomMono8(72, 128, 31), r = randomMono8(72, 128, 32);
+  Eigen::MatrixXd unblurred_left;
+  cv::cv2eigen(l->image, unblurred_left);
+
+  std::unique_ptr<constStampedTimeSurfaceObs> obs(
+    new constStampedTimeSurfaceObs(ros::Time(0), TimeSurfaceObservation(l, r, 0, false)));
+  obs->second.tr_.setIdentity();
+
+  CameraSystem::Ptr cam = std::make_shared<CameraSystem>(
+    std::string(ESVO2_CORE_SOURCE_DIR) + "/calib/evk4_stereo", false);
+  std::unique_ptr<core::EventBM> bf(new core::EventBM(cam, 4, /*bSmoothTS=*/true));
+  bf->resetParameters(15, 7, 0, 320, 3, 0.2, false);
+  bf->setUseFloat(true);
+
+  std::vector<dvs_msgs::Event *> ptrs; // empty: only the mirror refresh is under test
+  bf->createMatchProblem(obs.get(), nullptr, &ptrs);
+
+  ASSERT_EQ(obs->second.TS_left_f_.rows(), obs->second.TS_left_.rows());
+  ASSERT_EQ(obs->second.TS_left_f_.cols(), obs->second.TS_left_.cols());
+  // The mirror must equal the (post-blur) TS_left_ ...
+  EXPECT_TRUE((obs->second.TS_left_f_.cast<double>().array() == obs->second.TS_left_.array()).all());
+  // ... and that TS_left_ must actually be the blurred surface, not the raw
+  // image, otherwise the equality above would be true trivially.
+  EXPECT_FALSE((obs->second.TS_left_.array() == unblurred_left.array()).all());
+}
+
 // Regression test (A1 fix round 1): epipolarSearchingCoarse (double) skips
 // marking neighbours for fine search whenever the very first coarse
 // candidate (disparity == lowDisparity == 1) already passes the preliminary

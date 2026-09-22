@@ -59,5 +59,8 @@ TEST(DepthFloat, L2NormAlsoMatches)
   sf.solve(&vEMP, sc.obs.get(), vf);
   ASSERT_EQ(vd.size(), vf.size());
   for (size_t i = 0; i < vd.size(); i++)
+  {
     EXPECT_NEAR(vf[i].variance(), vd[i].variance(), 1e-6 * std::abs(vd[i].variance())) << i;
+    EXPECT_NEAR(vf[i].residual(), vd[i].residual(), 1e-6 * std::abs(vd[i].residual()) + 1e-9) << i;
+  }
 }
