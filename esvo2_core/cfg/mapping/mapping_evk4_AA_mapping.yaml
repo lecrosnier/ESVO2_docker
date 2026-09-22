@@ -56,6 +56,11 @@ Denoising: False
 #   63-76% per leg over three runs, matching 0.25x replay with 10000.
 PROCESS_EVENT_NUM: 4000 #20000
 PROCESS_EVENT_NUM_AA: 4000 #20000
+# Static block matching and the static depth solve read float copies of the
+# time surfaces and allocate nothing per event (GPU programme step A1, see
+# docs/superpowers/specs/2026-09-22-mapping-float-a1-design.md). Off until A1's
+# validation passes; the temporal path always stays double.
+MAPPING_FLOAT: False
 x_patches: 8 
 y_patches: 6 
 select_points_from_AA: True

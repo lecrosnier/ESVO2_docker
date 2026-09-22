@@ -174,6 +174,18 @@ namespace esvo2_core
                          BM_step_, BM_ZNCC_Threshold_, BM_bUpDownConfiguration_, BM_patch_size_X_2_, BM_patch_size_Y_2_);
     BM_min_disparity_ = minDisparity;
     BM_max_disparity_ = maxDisparity;
+
+    // Float static BM and static depth solve (GPU programme step A1). After
+    // resetParameters, which sets the patch size setUseFloat checks.
+    bMappingFloat_ = tools::param(pnh_, "MAPPING_FLOAT", false);
+    ebm_.setUseFloat(bMappingFloat_);
+    dpSolver_.setUseFloat(bMappingFloat_);
+    if (bMappingFloat_ && !golden_capture_dir_.empty())
+    {
+      LOG(WARNING) << "golden_capture_dir ignored: the golden capture records the double path, and MAPPING_FLOAT is on.";
+      golden_capture_dir_.clear();
+    }
+    LOG(INFO) << "MAPPING_FLOAT: " << (bMappingFloat_ ? "on (static BM and depth solve in float)" : "off");
     // system status
     ESVO2_System_Status_ = "INITIALIZATION";
     nh_.setParam("/ESVO2_SYSTEM_STATUS", ESVO2_System_Status_);

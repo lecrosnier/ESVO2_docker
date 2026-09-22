@@ -240,6 +240,7 @@ namespace esvo2_core
     // options
     bool changed_frame_rate_;
     bool bRegularization_;
+    bool bMappingFloat_;
     bool resetButton_;
     bool bDenoising_;
     bool bVisualizeGlobalPC_;
