@@ -95,6 +95,17 @@ struct DepthProblem : public factor::OptimizationFunctor<double>
   int wy,
   bool debug = false) const;
 
+  // ---- Float path (MAPPING_FLOAT), static (left-right) problems only ----
+  // Same residual as operator() for LSnorm Tdist and l2, reading
+  // TimeSurfaceObservation::TS_left_f_ / TS_right_f_; writes wx*wy values to
+  // fvec and allocates nothing.
+  static constexpr size_t kMaxPatchArea = 256;
+  int residualsFloat(double invDepth, double *fvec) const;
+  // Bilinear patch of wy x wx around location, row-major into patch[y*wx + x].
+  bool patchInterpolationFloat(
+    const Eigen::MatrixXf &img,
+    const Eigen::Vector2d &location,
+    double *patch) const;
 
   // variables
   CameraSystem::Ptr camSysPtr_;

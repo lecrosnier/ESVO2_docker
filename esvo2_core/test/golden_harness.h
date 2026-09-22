@@ -74,12 +74,14 @@ struct Offline
   }
 
   // Each solver gets its own config: DepthProblemSolver halves the patch size in place.
-  std::unique_ptr<core::DepthProblemSolver> makeSolver()
+  std::unique_ptr<core::DepthProblemSolver> makeSolver(bool use_float = false)
   {
     dpConfigs.push_back(std::make_shared<core::DepthProblemConfig>(
       cfg.patch_size_X, cfg.patch_size_Y, cfg.LSnorm, cfg.Tdist_nu, cfg.Tdist_scale, 1, 5, 8, 8));
-    return std::unique_ptr<core::DepthProblemSolver>(new core::DepthProblemSolver(
+    std::unique_ptr<core::DepthProblemSolver> s(new core::DepthProblemSolver(
       cam, dpConfigs.back(), core::NUMERICAL, cfg.num_threads, true));
+    s->setUseFloat(use_float);
+    return s;
   }
 };
 

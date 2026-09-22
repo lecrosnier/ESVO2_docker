@@ -135,3 +135,51 @@ TEST(Golden, FloatBlockMatchingMeetsSpec)
   EXPECT_EQ(disp_ok, both);
   EXPECT_EQ(inv_ok, both);
 }
+
+static double relDiff(double a, double b)
+{
+  const double scale = std::max(std::abs(a), std::abs(b));
+  return scale == 0 ? 0 : std::abs(a - b) / scale;
+}
+
+// Spec acceptance for the static depth solve, on the same (captured) match
+// pairs: variance and residual within 0.1% for >= 99.9% of points.
+TEST(Golden, FloatDepthSolveMeetsSpec)
+{
+  const std::vector<std::string> files = goldenFiles();
+  if (files.empty())
+    GTEST_SKIP() << "no golden capture in " << goldenDir() << " (see plan Task 3)";
+  size_t points = 0, ok = 0;
+  std::vector<double> var_rel, res_rel;
+  for (const std::string &file : files)
+  {
+    tools::GoldenConfig cfg;
+    tools::GoldenCycle c;
+    if (!loadCycle(file, cfg, c))
+      continue;
+    Offline off(cfg);
+    std::unique_ptr<constStampedTimeSurfaceObs> obs = makeObservation(c);
+    obs->second.refreshFloatMirrors();
+    std::vector<core::EventMatchPair> vEMP = makeMatches(c, *obs);
+    std::vector<DepthPoint> vd, vf;
+    off.makeSolver(false)->solve(&vEMP, obs.get(), vd);
+    off.makeSolver(true)->solve(&vEMP, obs.get(), vf);
+    ASSERT_EQ(vd.size(), vf.size()) << file;
+    for (size_t i = 0; i < vd.size(); i++)
+    {
+      const double rv = relDiff(vd[i].variance(), vf[i].variance());
+      const double rr = relDiff(vd[i].residual(), vf[i].residual());
+      var_rel.push_back(rv);
+      res_rel.push_back(rr);
+      points++;
+      ok += (rv <= 1e-3 && rr <= 1e-3);
+    }
+  }
+  std::printf("[golden depth] %zu points, within 0.1%%: %zu (%.4f%%)\n",
+              points, ok, 100.0 * ok / std::max<size_t>(points, 1));
+  std::printf("[golden depth] rel d variance: p50 %.3g p99 %.3g max %.3g\n",
+              percentile(var_rel, 0.5), percentile(var_rel, 0.99), percentile(var_rel, 1.0));
+  std::printf("[golden depth] rel d residual: p50 %.3g p99 %.3g max %.3g\n",
+              percentile(res_rel, 0.5), percentile(res_rel, 0.99), percentile(res_rel, 1.0));
+  EXPECT_GE(ok, 0.999 * points);
+}

@@ -436,5 +436,114 @@ bool DepthProblem::patchInterpolation(
 }
 
 
+int DepthProblem::residualsFloat(double invDepth, double *fvec) const
+{
+  const size_t wx = dpConfigPtr_->patchSize_X_;
+  const size_t wy = dpConfigPtr_->patchSize_Y_;
+  const size_t patchSize = wx * wy;
+  const bool l2 = dpConfigPtr_->LSnorm_ == "l2";
+  Eigen::Vector2d x1_s, x2_s;
+  double tau1[kMaxPatchArea], tau2[kMaxPatchArea];
+  const bool pass = warping(coordinate_, invDepth, vT_left_virtual_[0], x1_s, x2_s) &&
+                    patchInterpolationFloat(pStampedTsObs_->second.TS_left_f_, x1_s, tau1) &&
+                    patchInterpolationFloat(pStampedTsObs_->second.TS_right_f_, x2_s, tau2);
+  if (!pass)
+  {
+    // the same constant residuals operator() assigns when the patch is lost
+    for (size_t i = 0; i < patchSize; i++)
+    {
+      if (l2)
+        fvec[i] = 255;
+      else
+      {
+        double residual = 255;
+        double weight = (dpConfigPtr_->td_nu_ + 1) / (dpConfigPtr_->td_nu_ + std::pow(residual / dpConfigPtr_->td_scale_, 2));
+        fvec[i] = sqrt(weight) * residual;
+      }
+    }
+    return 0;
+  }
+
+  if (l2)
+  {
+    for (size_t index = 0; index < patchSize; index++)
+      fvec[index] = tau1[index] - tau2[index];
+    return 1;
+  }
+
+  // Tdist, as in operator()
+  double vResidual[kMaxPatchArea], vResidualSquared[kMaxPatchArea];
+  double scaleSquaredTmp1 = dpConfigPtr_->td_scaleSquared_;
+  double scaleSquaredTmp2 = -1.0;
+  bool first_iteration = true;
+  // loop for scale until it converges
+  while (fabs(scaleSquaredTmp2 - scaleSquaredTmp1) / scaleSquaredTmp1 > 0.05 || first_iteration)
+  {
+    if (!first_iteration)
+      scaleSquaredTmp1 = scaleSquaredTmp2;
+
+    double sum_scaleSquared = 0;
+    for (size_t index = 0; index < patchSize; index++)
+    {
+      if (first_iteration)
+      {
+        vResidual[index] = tau1[index] - tau2[index];
+        vResidualSquared[index] = std::pow(vResidual[index], 2);
+      }
+      if (vResidual[index] != 0)
+        sum_scaleSquared += vResidualSquared[index] * (dpConfigPtr_->td_nu_ + 1) /
+                            (dpConfigPtr_->td_nu_ + vResidualSquared[index] / scaleSquaredTmp1);
+    }
+    if (sum_scaleSquared == 0)
+    {
+      scaleSquaredTmp2 = dpConfigPtr_->td_scaleSquared_;
+      break;
+    }
+    scaleSquaredTmp2 = sum_scaleSquared / patchSize;
+    first_iteration = false;
+  }
+
+  // assign reweighted residual
+  for (size_t index = 0; index < patchSize; index++)
+  {
+    double weight = (dpConfigPtr_->td_nu_ + 1) / (dpConfigPtr_->td_nu_ + vResidualSquared[index] / scaleSquaredTmp2);
+    fvec[index] = sqrt(weight) * vResidual[index];
+  }
+  return 1;
+}
+
+bool DepthProblem::patchInterpolationFloat(
+  const Eigen::MatrixXf &img,
+  const Eigen::Vector2d &location,
+  double *patch) const
+{
+  // Same bounds checks and arithmetic order as patchInterpolation.
+  const int wx = dpConfigPtr_->patchSize_X_;
+  const int wy = dpConfigPtr_->patchSize_Y_;
+  const int lx = (int)floor(location[0]);
+  const int ly = (int)floor(location[1]);
+  const int left = lx - (wx - 1) / 2;
+  const int top = ly - (wy - 1) / 2;
+  if (left < 0 || top < 0)
+    return false;
+  if (lx + (wx - 1) / 2 >= img.cols() || ly + (wy - 1) / 2 >= img.rows())
+    return false;
+  if (top + wy >= img.rows() || left + wx >= img.cols())
+    return false;
+
+  const double q1 = (lx + 1) - location[0]; // x
+  const double q2 = location[0] - lx;       // x
+  const double q3 = (ly + 1) - location[1]; // y
+  const double q4 = location[1] - ly;       // y
+  for (int y = 0; y < wy; y++)
+    for (int x = 0; x < wx; x++)
+    {
+      const double r0 = q1 * img(top + y, left + x) + q2 * img(top + y, left + x + 1);
+      const double r1 = q1 * img(top + y + 1, left + x) + q2 * img(top + y + 1, left + x + 1);
+      patch[y * wx + x] = q3 * r0 + q4 * r1;
+    }
+  return true;
+}
+
 }// core
 }// esvo2_core

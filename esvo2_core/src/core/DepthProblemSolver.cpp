@@ -46,6 +46,10 @@ void DepthProblemSolver::solve(
 //  tt.tic();
   //distribute the loads
   // NUM_THREAD_ = 1;
+  if(use_float_ && (pStampedTsObs->second.TS_left_f_.rows() != pStampedTsObs->second.TS_left_.rows() ||
+                    pStampedTsObs->second.TS_left_f_.cols() != pStampedTsObs->second.TS_left_.cols()))
+    LOG(FATAL) << "MAPPING_FLOAT: float time surfaces not prepared; EventBM::createMatchProblem "
+                  "(with setUseFloat(true)) must run before the float depth solve.";
   std::vector<Job> jobs(NUM_THREAD_);
   for(size_t i = 0;i < NUM_THREAD_;i++)
   {
@@ -73,7 +77,9 @@ void DepthProblemSolver::solve(
 //   //
   std::vector<std::thread> threads;
   for(size_t i = 0; i < NUM_THREAD_;i++)
-    threads.emplace_back(std::bind(&DepthProblemSolver::init_single_point, this, jobs[i]));
+    threads.emplace_back(std::bind(use_float_ ? &DepthProblemSolver::init_single_point_f
+                                              : &DepthProblemSolver::init_single_point,
+                                   this, jobs[i]));
   for( auto & thread : threads)
   {
     if(thread.joinable())
@@ -234,27 +240,87 @@ bool DepthProblemSolver::init_single_point(
       result[1] = std::pow(job.dProblemPtr_->dpConfigPtr_->td_stdvar_,2) / (R*R);
       result[2] = val1.norm() * val1.norm();
 
-      DepthPoint dp(std::floor(coor(1)), std::floor(coor(0)));
-      dp.update_x(coor);
-      Eigen::Vector3d p_cam;
-      camSysPtr_->cam_left_ptr_->cam2World(coor, result[0], p_cam);
-      dp.update_p_cam(p_cam);
-      if(strcmp(dpConfigPtr_->LSnorm_.c_str(), "l2") == 0 || strcmp(dpConfigPtr_->LSnorm_.c_str(), "zncc") == 0)
-        dp.update(result[0], result[1]);
-      else if(strcmp(dpConfigPtr_->LSnorm_.c_str(), "Tdist") == 0)
-      {
-        double scale2_rho = result[1] * (dpConfigPtr_->td_nu_ - 2) / dpConfigPtr_->td_nu_;
-        dp.update_studentT(result[0], scale2_rho, result[1], dpConfigPtr_->td_nu_);
-      }
-      else
-        exit(-1);
-      dp.residual() = result[2];
-      // dp.residual() = 1;
-      dp.updatePose(T_world_virtual);
-      job.vdpPtr_->push_back(dp);
+      appendDepthPoint(job, coor, result, T_world_virtual);
     }
     return true;
   }
+
+void DepthProblemSolver::appendDepthPoint(
+  Job &job, const Eigen::Vector2d &coor, const float result[3],
+  Eigen::Matrix<double, 4, 4> &T_world_virtual)
+{
+  DepthPoint dp(std::floor(coor(1)), std::floor(coor(0)));
+  dp.update_x(coor);
+  Eigen::Vector3d p_cam;
+  camSysPtr_->cam_left_ptr_->cam2World(coor, result[0], p_cam);
+  dp.update_p_cam(p_cam);
+  if(strcmp(dpConfigPtr_->LSnorm_.c_str(), "l2") == 0 || strcmp(dpConfigPtr_->LSnorm_.c_str(), "zncc") == 0)
+    dp.update(result[0], result[1]);
+  else if(strcmp(dpConfigPtr_->LSnorm_.c_str(), "Tdist") == 0)
+  {
+    double scale2_rho = result[1] * (dpConfigPtr_->td_nu_ - 2) / dpConfigPtr_->td_nu_;
+    dp.update_studentT(result[0], scale2_rho, result[1], dpConfigPtr_->td_nu_);
+  }
+  else
+    exit(-1);
+  dp.residual() = result[2];
+  dp.updatePose(T_world_virtual);
+  job.vdpPtr_->push_back(dp);
+}
+
+void DepthProblemSolver::setUseFloat(bool use_float)
+{
+  if(use_float)
+  {
+    if(!slove_lr_)
+      LOG(FATAL) << "MAPPING_FLOAT covers the static (left-right) depth solve only.";
+    if(dpConfigPtr_->LSnorm_ != "Tdist" && dpConfigPtr_->LSnorm_ != "l2")
+      LOG(FATAL) << "MAPPING_FLOAT supports LSnorm Tdist or l2, not " << dpConfigPtr_->LSnorm_;
+    if(dpConfigPtr_->patchSize_X_ * dpConfigPtr_->patchSize_Y_ > DepthProblem::kMaxPatchArea)
+      LOG(FATAL) << "MAPPING_FLOAT: depth patch " << dpConfigPtr_->patchSize_X_ << "x"
+                 << dpConfigPtr_->patchSize_Y_ << " exceeds " << DepthProblem::kMaxPatchArea << " pixels.";
+  }
+  use_float_ = use_float;
+}
+
+bool DepthProblemSolver::init_single_point_f(
+  Job & job)
+{
+  size_t i_thread = job.i_thread_;
+  size_t numEvent = job.pvEMP_->size();
+  job.vdpPtr_->clear();
+  job.vdpPtr_->reserve(numEvent / NUM_THREAD_ + 1);
+
+  constStampedTimeSurfaceObs* pStampedTsObs = job.pStamped_TS_obs_;
+  Eigen::Matrix<double, 4, 4> T_world_virtual = pStampedTsObs->second.tr_.getTransformationMatrix();
+  const size_t n = dpConfigPtr_->patchSize_X_ * dpConfigPtr_->patchSize_Y_;
+  alignas(16) double val1[DepthProblem::kMaxPatchArea], val2[DepthProblem::kMaxPatchArea];
+  Eigen::Map<const Eigen::VectorXd, Eigen::Aligned16> v1(val1, n), v2(val2, n);
+  for(size_t i = i_thread; i < numEvent; i+=NUM_THREAD_)
+  {
+    Eigen::Vector2d coor = (*job.pvEMP_)[i].x_left_;
+    double d_init = (*job.pvEMP_)[i].invDepth_;
+    if(i == i_thread)
+      job.dProblemPtr_->setProblem(coor, T_world_virtual, pStampedTsObs, slove_lr_);
+    else
+      job.dProblemPtr_->setProblem(coor);
+
+    // Same two residual evaluations and finite difference as init_single_point.
+    job.dProblemPtr_->residualsFloat(d_init, val1);
+    const double h = d_init * 0.05;
+    job.dProblemPtr_->residualsFloat(d_init + h, val2);
+    double R = ((v2 - v1) / h).norm();
+    if(R < 0.1 && R > -0.1)
+      R = 0.1;
+
+    float result[3];
+    result[0] = d_init;
+    result[1] = std::pow(dpConfigPtr_->td_stdvar_, 2) / (R*R);
+    result[2] = v1.norm() * v1.norm();
+    appendDepthPoint(job, coor, result, T_world_virtual);
+  }
+  return true;
+}
 
 
 bool DepthProblemSolver::solve_single_problem_numerical(

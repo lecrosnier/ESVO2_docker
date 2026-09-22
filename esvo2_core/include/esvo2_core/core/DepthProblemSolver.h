@@ -61,6 +61,15 @@ class DepthProblemSolver
   bool init_single_point(
     Job & job);
 
+  // ---- Float path (MAPPING_FLOAT), static (slove_lr) solver only ----
+  // Aborts for the temporal solver, for LSnorm other than Tdist/l2, or for a
+  // patch above DepthProblem::kMaxPatchArea. solve() then runs
+  // init_single_point_f, which reads the float mirrors that
+  // EventBM::createMatchProblem refreshed and allocates nothing per point.
+  void setUseFloat(bool use_float);
+  bool useFloat() const { return use_float_; }
+  bool init_single_point_f(Job & job);
+
   void pointCulling(
     std::vector<DepthPoint> &vdp,
     double std_variance_threshold,
@@ -71,6 +80,11 @@ class DepthProblemSolver
   DepthProblemType getProblemType();
 
   private:
+  // Builds the DepthPoint for one solved event and appends it to job.vdpPtr_.
+  void appendDepthPoint(Job &job, const Eigen::Vector2d &coor, const float result[3],
+                        Eigen::Matrix<double, 4, 4> &T_world_virtual);
+  bool use_float_ = false;
+
   CameraSystem::Ptr & camSysPtr_;
   std::shared_ptr<DepthProblemConfig> dpConfigPtr_;
   size_t NUM_THREAD_;
