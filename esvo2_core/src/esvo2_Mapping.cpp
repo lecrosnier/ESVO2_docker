@@ -32,14 +32,19 @@ namespace esvo2_core
       const ros::NodeHandle &nh_private)
       : nh_(nh),
         pnh_(nh_private),
-        TS_left_sub_(nh_, "time_surface_left", 10),
-        TS_right_sub_(nh_, "time_surface_right", 10),
-        AA_map_sub_(nh_, "AA_map", 10),
-        TS_negative_sub_(nh_, "time_surface_negative", 10),
-        TS_dx_sub_(nh_, "time_surface_negative_dx", 10),
-        TS_dy_sub_(nh_, "time_surface_negative_dy", 10),
-        TS_sync_(ApproxSyncPolicy(10), TS_left_sub_, TS_dx_sub_),
-        TS_AA_sync_(ApproxSyncPolicy2(10), TS_left_sub_, TS_right_sub_, AA_map_sub_,
+        // Six full-frame images per cycle. When mapping cannot keep up, a deep
+        // queue makes it work through stale frames instead of skipping to the
+        // newest: with 10 at 50 Hz it ran a fixed 200 ms behind the stream, and
+        // the tracker then registered against a map 300-400 ms old. Shallow
+        // queues drop the backlog instead. Default 10 keeps the old behaviour.
+        TS_left_sub_(nh_, "time_surface_left", tools::param(pnh_, "TS_QUEUE_SIZE", 10)),
+        TS_right_sub_(nh_, "time_surface_right", tools::param(pnh_, "TS_QUEUE_SIZE", 10)),
+        AA_map_sub_(nh_, "AA_map", tools::param(pnh_, "TS_QUEUE_SIZE", 10)),
+        TS_negative_sub_(nh_, "time_surface_negative", tools::param(pnh_, "TS_QUEUE_SIZE", 10)),
+        TS_dx_sub_(nh_, "time_surface_negative_dx", tools::param(pnh_, "TS_QUEUE_SIZE", 10)),
+        TS_dy_sub_(nh_, "time_surface_negative_dy", tools::param(pnh_, "TS_QUEUE_SIZE", 10)),
+        TS_sync_(ApproxSyncPolicy(tools::param(pnh_, "TS_QUEUE_SIZE", 10)), TS_left_sub_, TS_dx_sub_),
+        TS_AA_sync_(ApproxSyncPolicy2(tools::param(pnh_, "TS_QUEUE_SIZE", 10)), TS_left_sub_, TS_right_sub_, AA_map_sub_,
                       TS_negative_sub_, TS_dx_sub_, TS_dy_sub_),
         it_(nh),
         calibInfoDir_(tools::param(pnh_, "calibInfoDir", std::string(""))),

@@ -91,6 +91,13 @@ INIT_SGM_DP_NUM_THRESHOLD: 500
 # system needed 25-30 s to initialize and missed the start of a motion. At half
 # resolution an attempt takes ~0.1 s and initialization succeeds in two tries;
 # the seed is only sampled at event pixels, so the coarser map is enough.
+# Mapping receives six full-frame images per cycle. With the default queue of
+# 10 at 50 Hz, whenever mapping falls behind it works through a 200 ms backlog
+# instead of skipping to the newest frame, and the tracker then registers
+# against a map 300-400 ms old, which at 1x leaked a slide's translation into
+# the depth direction. 2 keeps the age near 150 ms; 1 starves the approximate
+# time sync and is worse than 10.
+TS_QUEUE_SIZE: 2
 SGM_DOWNSAMPLE: 2
 # Mapping's block matching and depth solve thread count (default 4). The laptop
 # has 12 cores and mapping is the cycle that overruns: 8 cut block matching from
