@@ -15,6 +15,7 @@
   <arg name="tracking_cfg" default="$(find esvo2_core)/cfg/tracking/tracking_evk4_AA.yaml"/>
   <arg name="ts_rate" default="25"/>
   <arg name="aa_window_ms" default="0"/>
+  <arg name="opencv_threads" default="0"/>
 
   <!-- Calibration folder -->
   <arg name="calibInfoDirStr" default="$(find esvo2_core)/calib/evk4_stereo"/>
@@ -40,6 +41,7 @@
          when both compete for CPU chasing an unreachable target. -->
     <param name="generation_rate_hz" value="$(arg ts_rate)" />
     <param name="aa_window_ms" value="$(arg aa_window_ms)" />
+    <param name="opencv_threads" value="$(arg opencv_threads)" />
   </node>
 
   <node name="image_representation_right" pkg="image_representation" type="image_representation" output="screen" clear_params="true" >
@@ -52,6 +54,7 @@
     <rosparam param="calibInfoDir" subst_value="true">$(arg calibInfoDirStr)</rosparam>
     <param name="generation_rate_hz" value="$(arg ts_rate)" />
     <param name="aa_window_ms" value="$(arg aa_window_ms)" />
+    <param name="opencv_threads" value="$(arg opencv_threads)" />
   </node>
 
   <!-- Mapping node -->

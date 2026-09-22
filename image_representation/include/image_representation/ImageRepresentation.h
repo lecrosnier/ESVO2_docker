@@ -149,6 +149,16 @@ namespace image_representation
     cv::Mat representation_AA_;
 
     Eigen::MatrixXd TS_temp_map;
+    // Time surface rendering in single precision. ts_map_ holds, per pixel, the
+    // time of its last event as (t - ts_epoch_) / decay_sec_; the epoch keeps
+    // the values small enough for float to resolve them (a raw t / decay_sec_
+    // is ~9e10, far past float's 24-bit mantissa).
+    cv::Mat ts_map_;
+    double ts_epoch_;
+    cv::Mat ts_work_;
+    std::vector<uchar> lut_;
+    cv::Mat ts_rect_;
+    void renderTimeSurface(double external_t, int distance, cv::Mat &TS_img);
 
     // for rectify
     cv::Mat undistmap1_, undistmap2_;

@@ -1,4 +1,6 @@
 #include <image_representation/ImageRepresentation.h>
+#include <chrono>
+#include <map>
 #include <opencv2/calib3d/calib3d.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/eigen.hpp>
@@ -12,6 +14,12 @@
 
 namespace image_representation
 {
+  // exp() of this is 0 in float: a pixel that has never fired.
+  static const float kTsMapEmpty = -200.0f;
+  // Time surface lookup table: 256 steps per decay constant, up to 6 of them.
+  static const int kLutPerDecay = 256;
+  static const int kLutSize = 6 * kLutPerDecay;
+
   ImageRepresentation::ImageRepresentation(ros::NodeHandle &nh, ros::NodeHandle nh_private) : nh_(nh)
   {
     // setup subscribers and publishers
@@ -60,6 +68,15 @@ namespace image_representation
     // The AA map (and the mapping candidates sampled from it) otherwise covers only
     // the events since the previous render, i.e. 1/generation_rate_hz seconds, so a
     // higher rate thins it out. A fixed window keeps it independent of the rate.
+    // OpenCV runs its parallel_for over all cores by default. With the mapping,
+    // tracking and both representation nodes doing that at once the pools
+    // oversubscribe the machine and every full-frame op slows down several
+    // fold. 0 keeps OpenCV's default.
+    int opencv_threads;
+    nh_private.param<int>("opencv_threads", opencv_threads, 0);
+    if (opencv_threads > 0)
+      cv::setNumThreads(opencv_threads);
+
     double aa_window_ms;
     nh_private.param<double>("aa_window_ms", aa_window_ms, 0.0);
     aa_window_s_ = aa_window_ms / 1000.0;
@@ -100,6 +117,9 @@ namespace image_representation
 
     //Access to Eigen matrix is faster than cv::Mat
     TS_temp_map = Eigen::MatrixXd::Constant(sensor_size_.height, sensor_size_.width, -10);
+    ts_map_ = cv::Mat(sensor_size_, CV_32F, cv::Scalar(kTsMapEmpty));
+    ts_work_ = cv::Mat(sensor_size_, CV_32F);
+    ts_epoch_ = 0.0;
     vEvents_.reserve(5000000);
   }
 
@@ -200,6 +220,57 @@ namespace image_representation
     image_representation_pub_AA_mat_.publish(cv_AA_mat.toImageMsg());
   }
 
+  // TS_img = 255 * exp((t_pixel - external_t) / decay_sec_), as 8-bit.
+  // Single precision throughout, and the pixel times live in a cv::Mat so the
+  // fill below is row-major (the Eigen map it replaced was column-major, and
+  // eigen2cv copied the whole frame every cycle).
+  void ImageRepresentation::renderTimeSurface(double external_t, int distance, cv::Mat &TS_img)
+  {
+    if (ts_epoch_ == 0.0)
+      ts_epoch_ = external_t;
+    // Rebase before float resolution at now_rel degrades: at 1e6 the spacing is
+    // 0.0625, i.e. 1.25 ms with a 20 ms decay.
+    double now_rel = (external_t - ts_epoch_) / decay_sec_;
+    if (now_rel > 1e6)
+    {
+      cv::subtract(ts_map_, cv::Scalar(now_rel), ts_map_);
+      cv::max(ts_map_, kTsMapEmpty, ts_map_);
+      ts_epoch_ = external_t;
+      now_rel = 0.0;
+    }
+
+    std::vector<dvs_msgs::Event>::iterator it = vBatch_.begin();
+    for (int i = 0; i < distance; i++)
+    {
+      if (i > distance - 2)
+        break;
+      const dvs_msgs::Event &e = *(it + i);
+      ts_map_.at<float>(e.y, e.x) = static_cast<float>((e.ts.toSec() - ts_epoch_) / decay_sec_);
+    }
+
+    // 255 * exp(ts - now) in one pass, from a table indexed by the age in units
+    // of kLutPerDecay per decay constant. Beyond kLutSize the value rounds to 0
+    // in 8 bits anyway (exp(-6) * 255 < 0.7).
+    if (lut_.empty())
+    {
+      lut_.resize(kLutSize);
+      for (int i = 0; i < kLutSize; i++)
+        lut_[i] = cv::saturate_cast<uchar>(255.0 * std::exp(-static_cast<double>(i) / kLutPerDecay));
+    }
+    TS_img.create(ts_map_.size(), CV_8U);
+    const float nowf = static_cast<float>(now_rel);
+    for (int y = 0; y < ts_map_.rows; y++)
+    {
+      const float *src = ts_map_.ptr<float>(y);
+      uchar *dst = TS_img.ptr<uchar>(y);
+      for (int x = 0; x < ts_map_.cols; x++)
+      {
+        const int age = static_cast<int>((nowf - src[x]) * kLutPerDecay);
+        dst[x] = age >= kLutSize ? 0 : lut_[age];
+      }
+    }
+  }
+
   void ImageRepresentation::createImageRepresentationAtTime(const ros::Time &external_sync_time)
   {
     if (!bcreat_)
@@ -245,35 +316,14 @@ namespace image_representation
       if (is_left_)   // generate AA and TS in parallel, just for left camera
       {
         std::thread thread0(&ImageRepresentation::AA_thread, this, std::cref(*aa_events), external_t);
-        representation_TS_.setTo(cv::Scalar(0));
-        cv::Mat TS_img = cv::Mat::zeros(sensor_size_, CV_64F);
-
-        // if the event rate is too high, we need to downsample the events
-        // step = 1 indicates that we use all the events
-        // double step = static_cast<double>(distance) / 90000.0;
-
-        double step = 1;
-        std::vector<dvs_msgs::Event>::iterator it = vBatch_.begin();
-
-        // generate TS map
-        for (int i = 0; i < distance; i++)
-        {
-          int index = static_cast<int>(i * step);
-          if (index > distance - 2)
-            break;
-          dvs_msgs::Event e = *(it + index);
-          TS_temp_map(e.y, e.x) = e.ts.toSec() / decay_sec_;
-        }
-
-        cv::eigen2cv(TS_temp_map, representation_TS_);
-        representation_TS_ = representation_TS_ - external_t / decay_sec_;
-        cv::exp(representation_TS_, representation_TS_);
-
-        TS_img = representation_TS_ * 255.0;
-        TS_img.convertTo(TS_img, CV_8U);
+        cv::Mat TS_img;
+        renderTimeSurface(external_t, distance, TS_img);
 
         //distortion correction
-        cv::remap(TS_img, TS_img, undistort_map1_, undistort_map2_, CV_INTER_LINEAR);
+        // Not in place: cv::remap cannot work in place and silently allocates a
+        // temporary for the whole frame on every call.
+        cv::remap(TS_img, ts_rect_, undistort_map1_, undistort_map2_, CV_INTER_LINEAR);
+        cv::swap(TS_img, ts_rect_);
 
         // generate OS-TS
         cv::Mat TS_img_blur;
@@ -286,9 +336,8 @@ namespace image_representation
         // generate and publish gradient map in parallel
         if (thread_sobel.joinable())
           thread_sobel.join();
-        negative_TS_img = cv::Mat::ones(sensor_size_, CV_8U);
-        negative_TS_img = negative_TS_img * 255;
-        negative_TS_img = negative_TS_img - OS_TS;
+        // 255 - OS_TS, in one pass and without the two temporaries.
+        cv::bitwise_not(OS_TS, negative_TS_img);
 
         cv_bridge::CvImage cv_TS_image, cv_negative_TS_image;
 
@@ -316,29 +365,11 @@ namespace image_representation
       }
       else // generate TS, just for right camera
       {
-        representation_TS_.setTo(cv::Scalar(0));
-        cv::Mat TS_img = cv::Mat::zeros(sensor_size_, CV_64F);
+        cv::Mat TS_img;
+        renderTimeSurface(external_t, distance, TS_img);
 
-        // double step = static_cast<double>(distance) / 90000.0;
-        // if (step < 1)
-        double step = 1;
-        std::vector<dvs_msgs::Event>::iterator it = vBatch_.begin();
-        for (int i = 0; i < distance; i++)
-        {
-          int index = static_cast<int>(i * step);
-          if (index > distance - 2)
-            break;
-          dvs_msgs::Event e = *(it + index);
-          TS_temp_map(e.y, e.x) = e.ts.toSec() / decay_sec_;
-        }
-        cv::eigen2cv(TS_temp_map, representation_TS_);
-
-        representation_TS_ = representation_TS_ - external_t / decay_sec_;
-        cv::exp(representation_TS_, representation_TS_);
-        TS_img = representation_TS_ * 255.0;
-        TS_img.convertTo(TS_img, CV_8U);
-
-        cv::remap(TS_img, TS_img, undistort_map1_, undistort_map2_, CV_INTER_LINEAR);
+        cv::remap(TS_img, ts_rect_, undistort_map1_, undistort_map2_, CV_INTER_LINEAR);
+        cv::swap(TS_img, ts_rect_);
 
         cv::medianBlur(TS_img, TS_img, 2 * median_blur_kernel_size_ + 1);
 
@@ -460,6 +491,9 @@ namespace image_representation
         cv::fisheye::initUndistortRectifyMap(camera_matrix_, dist_coeffs_,
                                              rectification_matrix_, projection_matrix_,
                                              sensor_size, CV_32FC1, undistort_map1_, undistort_map2_);
+        // Fixed point maps: cv::remap is about twice as fast with CV_16SC2 as with CV_32FC1.
+        { cv::Mat m1, m2; cv::convertMaps(undistort_map1_, undistort_map2_, m1, m2, CV_16SC2);
+          undistort_map1_ = m1; undistort_map2_ = m2; }
         bCamInfoAvailable_ = true;
         ROS_INFO("Camera information is loaded (Distortion model %s).", distortion_model_.c_str());
       }
@@ -468,6 +502,9 @@ namespace image_representation
         cv::initUndistortRectifyMap(camera_matrix_, dist_coeffs_,
                                     rectification_matrix_, projection_matrix_,
                                     sensor_size, CV_32FC1, undistort_map1_, undistort_map2_);
+        // Fixed point maps: cv::remap is about twice as fast with CV_16SC2 as with CV_32FC1.
+        { cv::Mat m1, m2; cv::convertMaps(undistort_map1_, undistort_map2_, m1, m2, CV_16SC2);
+          undistort_map1_ = m1; undistort_map2_ = m2; }
         bCamInfoAvailable_ = true;
         ROS_INFO("Camera information is loaded (Distortion model %s).", distortion_model_.c_str());
       }
