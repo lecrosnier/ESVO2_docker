@@ -152,6 +152,42 @@ pass and BM + variance time drops measurably on the benchmark. If the
 speedup is negligible, A1 still stands as groundwork (float storage is a
 prerequisite for A3/A4), and its numbers feed the A2 decision.
 
+## Planning notes (added 2026-09-22, while writing the plan)
+
+Reading the code for the plan changed four details. These notes take
+precedence over the sections above.
+
+1. **The float path covers the static (left-right) path only**: static block
+   matching (`match_an_event2`) and the static depth solve (`dpSolver_`). The
+   temporal path stays double. That includes temporal BM (already excluded
+   above, via SSIM) and the temporal depth solve (`dpSolver_ln_`). The reason
+   for the temporal depth solve is a pre-existing bug, present since the
+   upstream first commit: `DepthProblem::setProblem` sets `T_last_now_` only
+   when `problem_lr` is true, but `warping()` reads it only when `problem_lr`
+   is false. So the temporal depth solve warps with an uninitialised matrix,
+   its output is undefined, and it cannot be checked for equivalence. Fixing
+   it would change behaviour, so it is left for a separate decision.
+2. **Only two float mirrors are needed**: `TS_left_f_` and `TS_right_f_`.
+   `init_single_point` calls only `DepthProblem::operator()`, never `df()`,
+   so `TS_last_du`/`TS_last_dv` are not on the live path, and `AA_map_` and
+   `TS_last_` belong to the temporal path. The mirrors are cast from the
+   double surfaces right after the optional blur in
+   `EventBM::createMatchProblem`, so they always hold what the double path
+   reads.
+3. **Float sums are exact here.** The surfaces are 8-bit (mono8, and still
+   integer after the 5×5 blur). With a 15×7 patch, every sum of values or of
+   products is an integer below 2^24, which float stores exactly. The float
+   path therefore accumulates in float and computes the ZNCC ratios and the
+   depth-solve arithmetic in double. The static BM result is expected to be
+   bit-identical to the double path. The spec's tolerances stay as the
+   acceptance bar. `EventBM::setUseFloat` refuses patches larger than 258
+   pixels, where exactness would be lost.
+4. **Golden surfaces are stored as 8-bit PNG**, which is lossless for this
+   data, instead of float. The capture records the raw config values, and
+   the static BM disparity range is recomputed from them by a shared
+   function (`EventBM::disparityRange`). The node narrows the YAML's 0–320 px
+   to the depth range (23–239 px on this rig).
+
 ## Risks
 
 - **Float flips near the ZNCC threshold** change which points enter the map.
