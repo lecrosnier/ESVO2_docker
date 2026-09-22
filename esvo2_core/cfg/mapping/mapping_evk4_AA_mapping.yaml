@@ -56,7 +56,13 @@ select_points_from_AA: True
 eta_for_select_points: 0.1
 
 # Configuration for visualization
-Regularization: True
+# Off for the live EVK4 rig: at real time mapping is the bottleneck (cycle
+# ~90 ms against a 40 ms budget at ts_rate 25), and regularization is its
+# largest single stage (31% of the cycle, 28 ms mean, 72 ms p90) and runs
+# serially. Measured 2026-09-22 on slide4_bias.bag replayed at 1x, lock on:
+# off, the cycle drops to ~80 ms and a 1 m out-and-back slide recovers 41-45%
+# of the true translation (two runs) against 25% with it on.
+Regularization: False
 RegularizationRadius: 20
 RegularizationMinNeighbours: 32
 RegularizationMinCloseNeighbours: 32
