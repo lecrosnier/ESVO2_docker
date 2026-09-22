@@ -64,11 +64,12 @@ struct Offline
   }
 
   // Surfaces are captured after the node's blur, so no smoothing here.
-  std::unique_ptr<core::EventBM> makeBM()
+  std::unique_ptr<core::EventBM> makeBM(bool use_float = false)
   {
     std::unique_ptr<core::EventBM> bm(new core::EventBM(cam, cfg.num_threads, false));
     bm->resetParameters(cfg.patch_size_X, cfg.patch_size_Y, disp.first, disp.second,
                         cfg.BM_step, cfg.BM_ZNCC_Threshold, false);
+    bm->setUseFloat(use_float);
     return bm;
   }
 

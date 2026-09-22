@@ -104,6 +104,28 @@ public:
                         Eigen::MatrixXd &patch_right, int &disp_to_rm, int &step_to_rm, double &mean_l, double &Tl_2, double &Tr, double &Tr_quare);
   double zncc_cost2(Eigen::MatrixXd &patch_left, Eigen::MatrixXd &patch_right, double &var_l, double &mean_l);
   float getMSSIM( const cv::Mat& i1, const cv::Mat& i2);
+
+  // ---- Float path (MAPPING_FLOAT), static block matching only ----
+  // Reads TimeSurfaceObservation::TS_left_f_ / TS_right_f_ through views and
+  // reuses per-thread scratch, so matching an event allocates nothing. Same
+  // algorithm, thresholds and counters as match_an_event2. Sums of 8-bit
+  // values and products are accumulated in float, which is exact while the
+  // patch has at most 258 pixels (floatSumsAreExact); ratios are taken in double.
+  struct BmScratch
+  {
+    Eigen::VectorXf colSum, colSquareSum;
+    std::vector<char> searching_or_not;
+    std::vector<size_t> searching_radius;
+  };
+  void setUseFloat(bool use_float); // after resetParameters; aborts if the patch is too large
+  bool useFloat() const { return use_float_; }
+  static bool floatSumsAreExact(size_t patch_size_X, size_t patch_size_Y);
+  void prepareScratch(BmScratch &s) const; // sizes s for this matcher's patch and disparity range
+  bool match_an_event2_f(
+    const dvs_msgs::Event *pEvent,
+    std::pair<size_t, size_t>& pDisparityBound,
+    EventMatchPair &emPair,
+    BmScratch &s);
 private:
   void match(EventBM::Job &job);
   void match2(EventBM::Job &job);
@@ -130,6 +152,22 @@ private:
   bool isNeedSSIM(std::vector<double>& costs);
   bool isValidPatch(Eigen::Vector2i& x, Eigen::Vector2i& left_top, int size_y, int size_x);
   double triangulatePoint(Eigen::Vector2d &point0, Eigen::Vector2d &point1, double depth);
+
+  using ConstPatchF = Eigen::Ref<const Eigen::MatrixXf, 0, Eigen::OuterStride<> >;
+  bool epipolarSearchingCoarse_f(
+    double& min_cost, Eigen::Vector2i& bestMatch, size_t& bestDisp,
+    size_t searching_start_pos, size_t searching_end_pos, size_t searching_step,
+    Eigen::Vector2i& x1, const ConstPatchF& patch_src, BmScratch& s, size_t nColSum,
+    double mean_l, double Tl_square, double& Tr, double& Tr_square);
+  bool epipolarSearchingFine_f(
+    double& min_cost, Eigen::Vector2i& bestMatch, size_t& bestDisp,
+    Eigen::Vector2i& x1, const ConstPatchF& patch_src, const BmScratch& s);
+  double zncc_cost_fast_f(
+    const BmScratch& s, size_t nColSum, const ConstPatchF& patch_left, const ConstPatchF& patch_right,
+    int disp_to_rm, int step_to_rm, double mean_l, double Tl_square, double& Tr, double& Tr_square) const;
+  double zncc_cost2_f(const ConstPatchF& patch_left, const ConstPatchF& patch_right,
+                      double var_l, double mean_l) const;
+  bool use_float_ = false;
 private:
   CameraSystem::Ptr camSysPtr_;
   constStampedTimeSurfaceObs* pStampedTsObs_;

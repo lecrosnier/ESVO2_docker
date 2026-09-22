@@ -94,6 +94,10 @@ void esvo2_core::core::EventBM::createMatchProblem(
       pStampedTsObs_->second.GaussianBlurTS(5);
   }
 
+  // The float path reads float copies of the (possibly blurred) surfaces.
+  if(use_float_ && pStampedTsObs_)
+    pStampedTsObs_->second.refreshFloatMirrors();
+
   vpDisparitySearchBound_.clear();
   vpDisparitySearchBound_.reserve(numEvents);
   for(size_t i = 0; i < vEventsPtr_.size(); i++)
@@ -908,13 +912,18 @@ void esvo2_core::core::EventBM::match2(
   size_t i_thread = job.i_thread_;
   size_t totalNumEvents = job.pvEventPtr_->size();
   job.pvEventMatchPair_->reserve(totalNumEvents / NUM_THREAD_ + 1);
+  BmScratch scratch;
+  if(use_float_)
+    prepareScratch(scratch);
   auto ev_it = job.pvEventPtr_->begin();
   std::advance(ev_it, i_thread);
   for(size_t i = i_thread; i < totalNumEvents; i+=NUM_THREAD_, std::advance(ev_it, NUM_THREAD_))
   {
     EventMatchPair emp;
     std::pair<size_t, size_t> pDisparityBound = (*job.pvpDisparitySearchBound_)[i];
-    if(match_an_event2(*ev_it, pDisparityBound, emp))
+    const bool matched = use_float_ ? match_an_event2_f(*ev_it, pDisparityBound, emp, scratch)
+                                    : match_an_event2(*ev_it, pDisparityBound, emp);
+    if(matched)
       job.pvEventMatchPair_->push_back(emp);
   }
 }
@@ -1096,4 +1105,266 @@ double esvo2_core::core::EventBM::triangulatePoint(Eigen::Vector2d &point0, Eige
   triangulated_point = triangulated_point / triangulated_point(3);
   Eigen::Vector3d temp = triangulated_point.block(0,0,3,1);
 	return temp(2);
+}
+
+/*************************** Float path (MAPPING_FLOAT) ***************************/
+
+bool esvo2_core::core::EventBM::floatSumsAreExact(size_t patch_size_X, size_t patch_size_Y)
+{
+  // The largest sum is a patch dot product, at most area * 255^2; float holds
+  // every integer up to 2^24 exactly.
+  return patch_size_X * patch_size_Y * 255 * 255 <= (size_t(1) << 24);
+}
+
+void esvo2_core::core::EventBM::setUseFloat(bool use_float)
+{
+  if(use_float && !floatSumsAreExact(patch_size_X_, patch_size_Y_))
+    LOG(FATAL) << "MAPPING_FLOAT: a " << patch_size_X_ << "x" << patch_size_Y_
+               << " patch is too large for exact float sums (at most 258 pixels).";
+  use_float_ = use_float;
+}
+
+void esvo2_core::core::EventBM::prepareScratch(BmScratch &s) const
+{
+  s.colSum.resize(patch_size_X_ + max_disparity_);
+  s.colSquareSum.resize(patch_size_X_ + max_disparity_);
+  s.searching_or_not.reserve(max_disparity_ + 1);
+  s.searching_radius.reserve(max_disparity_ + 1);
+}
+
+bool esvo2_core::core::EventBM::match_an_event2_f(
+  const dvs_msgs::Event* pEvent,
+  std::pair<size_t, size_t>& pDisparityBound,
+  esvo2_core::core::EventMatchPair& emPair,
+  BmScratch& s)
+{
+  size_t lowDisparity = 1;
+  size_t upDisparity  = pDisparityBound.second;
+
+  // Prevent zncc calculation from going out of bounds
+  int updisp = pEvent->x - (patch_size_X_ + 1)/2;
+  if(updisp < 1)
+    return false;
+  if(updisp < (int)upDisparity)
+    upDisparity = (size_t)updisp;
+  if(upDisparity < lowDisparity)
+    return false;
+
+  Eigen::Vector2d x_rect = camSysPtr_->cam_left_ptr_->getRectifiedUndistortedCoordinate(pEvent->x, pEvent->y);
+  if(x_rect(0) < 0 || x_rect(0) > camSysPtr_->cam_left_ptr_->width_ - 1 ||
+     x_rect(1) < 0 || x_rect(1) > camSysPtr_->cam_left_ptr_->height_ - 1)
+  {
+    infoNoiseRatioLowNum_++;
+    return false;
+  }
+  if(camSysPtr_->cam_left_ptr_->UndistortRectify_mask_((int)x_rect(1), (int)x_rect(0)) <= 125)
+  {
+    infoNoiseRatioLowNum_++;
+    return false;
+  }
+  Eigen::Vector2i x1(std::floor(x_rect(0)), std::floor(x_rect(1)));
+  Eigen::Vector2i x1_left_top;
+  if(!isValidPatch(x1, x1_left_top, patch_size_Y_, patch_size_X_))
+  {
+    infoNoiseRatioLowNum_++;
+    return false;
+  }
+
+  const Eigen::MatrixXf &TS_left = pStampedTsObs_->second.TS_left_f_;
+  const Eigen::MatrixXf &TS_right = pStampedTsObs_->second.TS_right_f_;
+  const ConstPatchF patch_src = TS_left.block(x1_left_top(1), x1_left_top(0), patch_size_Y_, patch_size_X_);
+  if((patch_src.array() < 1).count() > 0.95 * patch_src.size())
+  {
+    infoNoiseRatioLowNum_++;
+    return false;
+  }
+
+  double min_cost = ZNCC_MAX_;
+  Eigen::Vector2i bestMatch;
+  size_t bestDisp;
+  s.searching_or_not.assign(upDisparity - lowDisparity + 1, 0);
+
+  // Running sums for the fast ZNCC ("Optimizing ZNCC calculation in binocular
+  // stereo matching"), as in match_an_event2, over a view of the right strip.
+  const double n = patch_src.size();
+  const double mean_l = patch_src.sum() / n;
+  const double Tl_square = patch_src.array().square().sum();
+  if(x1_left_top(0) - (int)upDisparity < 0)
+    return false;
+  const ConstPatchF strip = TS_right.block(x1_left_top(1), x1_left_top(0) - (int)upDisparity,
+                                           patch_size_Y_, patch_size_X_ + upDisparity);
+  const size_t nColSum = strip.cols();
+  s.colSum.head(nColSum).noalias() = strip.colwise().sum().transpose();
+  s.colSquareSum.head(nColSum).noalias() = strip.array().square().colwise().sum().matrix().transpose();
+  double Tr = 0, Tr_square = 0;
+  for(int m = lowDisparity; m < (int)(lowDisparity + patch_src.cols()) && ((int)nColSum - 1 - m >= 0); m++)
+  {
+    Tr += s.colSum(nColSum - 1 - m);
+    Tr_square += s.colSquareSum(nColSum - 1 - m);
+  }
+
+  if(!epipolarSearchingCoarse_f(min_cost, bestMatch, bestDisp,
+    lowDisparity, upDisparity, step_,
+    x1, patch_src, s, nColSum, mean_l, Tl_square, Tr, Tr_square))
+  {
+    coarseSearchingFailNum_++;
+    return false;
+  }
+
+  s.searching_radius.clear();
+  for(size_t i = 0; i < s.searching_or_not.size(); i++)
+    if(s.searching_or_not[i])
+      s.searching_radius.push_back(lowDisparity + i);
+  if(step_ > 1)
+  {
+    if(!epipolarSearchingFine_f(min_cost, bestMatch, bestDisp, x1, patch_src, s))
+    {
+      fineSearchingFailNum_++;
+      return false;
+    }
+  }
+
+  // transfer best match to emPair
+  if(min_cost <= ZNCC_Threshold_*1.02)
+  {
+    emPair.x_left_raw_ = Eigen::Vector2d((double)pEvent->x, (double)pEvent->y);
+    emPair.x_left_ = x_rect;
+    emPair.x_right_ = Eigen::Vector2d((double)bestMatch(0), (double)bestMatch(1)) ;
+    emPair.t_ = pEvent->ts;
+    double disparity;
+    if(bUpDownConfiguration_)
+      disparity = x1(1) - bestMatch(1);
+    else
+      disparity = x1(0) - bestMatch(0);
+    double depth = camSysPtr_->baseline_ * camSysPtr_->cam_left_ptr_->P_(0,0) / disparity;
+    emPair.trans_ = pStampedTsObs_->second.tr_;
+    emPair.invDepth_ = 1.0 / depth;
+    emPair.cost_ = min_cost;
+    emPair.disp_ = disparity;
+    return true;
+  }
+  return false;
+}
+
+bool esvo2_core::core::EventBM::epipolarSearchingCoarse_f(
+  double& min_cost, Eigen::Vector2i& bestMatch, size_t& bestDisp,
+  size_t searching_start_pos, size_t searching_end_pos, size_t searching_step,
+  Eigen::Vector2i& x1, const ConstPatchF& patch_src, BmScratch& s, size_t nColSum,
+  double mean_l, double Tl_square, double& Tr, double& Tr_square)
+{
+  const Eigen::MatrixXf &TS_right = pStampedTsObs_->second.TS_right_f_;
+  for(size_t disp = searching_start_pos; disp <= searching_end_pos; disp += searching_step)
+  {
+    Eigen::Vector2i x2;
+    if(!bUpDownConfiguration_)
+      x2 << x1(0) - disp, x1(1);
+    else
+      x2 << x1(0), x1(1) - disp;
+    Eigen::Vector2i x2_left_top;
+    if(!isValidPatch(x2, x2_left_top, patch_size_Y_, patch_size_X_))
+      continue;
+    const ConstPatchF patch_dst = TS_right.block(x2_left_top(1), x2_left_top(0), patch_size_Y_, patch_size_X_);
+    const double cost = zncc_cost_fast_f(s, nColSum, patch_src, patch_dst, (int)disp, (int)searching_step,
+                                         mean_l, Tl_square, Tr, Tr_square);
+
+    // add to preliminarily match list
+    if(cost <= ZNCC_Threshold_*1.035)
+    {
+      const int rel = (int)disp - (int)searching_start_pos;
+      for(int i = rel - (int)searching_step; i < rel + (int)searching_step + 1; i++)
+        if(i >= 0 && i < (int)s.searching_or_not.size())
+          s.searching_or_not[i] = 1;
+    }
+    if(cost <= min_cost)
+    {
+      min_cost = cost;
+      bestMatch = x2;
+      bestDisp = disp;
+    }
+  }
+  return min_cost < ZNCC_Threshold_*1.03;
+}
+
+bool esvo2_core::core::EventBM::epipolarSearchingFine_f(
+  double& min_cost, Eigen::Vector2i& bestMatch, size_t& bestDisp,
+  Eigen::Vector2i& x1, const ConstPatchF& patch_src, const BmScratch& s)
+{
+  const Eigen::MatrixXf &TS_right = pStampedTsObs_->second.TS_right_f_;
+  const double n = patch_src.size();
+  const double mean_l = patch_src.sum() / n;
+  const double var_l = (double)patch_src.array().square().sum() - n * mean_l * mean_l;
+  for(size_t i = 0; i < s.searching_radius.size(); i++)
+  {
+    Eigen::Vector2i x2;
+    size_t disp = s.searching_radius[i];
+    if(!bUpDownConfiguration_)
+      x2 << x1(0) - disp, x1(1);
+    else
+      x2 << x1(0), x1(1) - disp;
+    Eigen::Vector2i x2_left_top;
+    if(!isValidPatch(x2, x2_left_top, patch_size_Y_, patch_size_X_))
+      continue;
+    const ConstPatchF patch_dst = TS_right.block(x2_left_top(1), x2_left_top(0), patch_size_Y_, patch_size_X_);
+    const double cost = zncc_cost2_f(patch_src, patch_dst, var_l, mean_l);
+    if(cost <= min_cost)
+    {
+      min_cost = cost;
+      bestMatch = x2;
+      bestDisp = disp;
+    }
+  }
+  return min_cost < ZNCC_Threshold_*1.02;
+}
+
+double esvo2_core::core::EventBM::zncc_cost_fast_f(
+  const BmScratch& s, size_t nColSum, const ConstPatchF& patch_left, const ConstPatchF& patch_right,
+  int disp_to_rm, int step_to_rm, double mean_l, double Tl_square, double& Tr, double& Tr_square) const
+{
+  // Same arithmetic, in the same order, as zncc_cost_fast.
+  const double n = patch_right.rows() * patch_right.cols();
+  double cost;
+  double mean_r = Tr / n;
+  if(mean_r == 0.0)
+    mean_r = 1e-3;
+  if(abs(mean_l - mean_r) / mean_l  > 5  || abs(mean_l - mean_r) / mean_r  > 5)
+    cost = 0;
+  else
+  {
+    const double cov = (double)(patch_left.array() * patch_right.array()).sum() - mean_l * Tr;
+    const double var_l = Tl_square - n * mean_l * mean_l;
+    const double var_r = Tr_square - Tr * Tr / n;
+    if(var_l * var_r == 0)
+      cost = 0;
+    else
+      cost = cov / sqrt(var_l * var_r);
+  }
+
+  const int last = (int)nColSum - 1;
+  const int cols = (int)patch_right.cols();
+  for(int i = 0; i < step_to_rm; i++)
+  {
+    if(last - disp_to_rm - cols > 0)
+    {
+      Tr = Tr - s.colSum[last - disp_to_rm] + s.colSum[last - disp_to_rm - cols];
+      Tr_square = Tr_square - s.colSquareSum[last - disp_to_rm] + s.colSquareSum[last - disp_to_rm - cols];
+      disp_to_rm++;
+    }
+  }
+  return 0.5 * (1 - cost);
+}
+
+double esvo2_core::core::EventBM::zncc_cost2_f(
+  const ConstPatchF& patch_left, const ConstPatchF& patch_right, double var_l, double mean_l) const
+{
+  // Same arithmetic, in the same order, as zncc_cost2.
+  const double n = patch_right.size();
+  const double mean_r = patch_right.sum() / n;
+  const double cov = (double)(patch_left.array() * patch_right.array()).sum() - n * mean_l * mean_r;
+  const double var_r = (double)patch_right.array().square().sum() - n * mean_r * mean_r;
+  double cost;
+  if(var_l * var_r == 0)
+    cost = 0;
+  else
+    cost = cov / sqrt(var_l * var_r);
+  return 0.5 * (1 - cost);
 }
