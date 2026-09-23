@@ -140,19 +140,26 @@ Scored over the published trajectory's window (89.1 s), ATE SE3 / Sim3:
 | Run | ATE | Path ratio |
 |---|---|---|
 | Paper's published trajectory (its config has `USE_IMU: True`) | 0.165 / 0.146 | 0.89 |
-| **Ours, vision-only, 0.5× replay** | **0.118 / 0.110** | **0.94** |
-| Ours, vision-only, 1× | 1.316 / 0.313 | 1.65 |
-| Ours, 1×, with the EVK4 settings (queue, float, threads, SGM) | 1.405 / 0.303 | 1.59 |
+| Ours, vision-only, 0.5× replay, 3 runs | 0.196–0.223 / 0.165–0.208 | 0.81–0.82 |
+| Ours, vision-only, 1×, 4 runs | 1.32–1.54 / 0.30–0.33 | 1.59–1.68 |
 | Ours, 1×, lighter mapping (`BM_step: 3`, regularization off) | 0.240 / 0.220 | 0.80 |
+| **Ours, 1×, after the regularizer work (A8), 4 runs** | **0.41–0.67 / 0.29–0.31** | **0.94–1.11** |
 | Upstream IMU mode (`USE_IMU: True`) | mapping segfaults ~2 s in | — |
 
-Three things follow.
+A caution about single runs, since this one caught me out: the first 0.5×
+run scored 0.118 and I reported that this build beats the paper on its own
+data. Repeats put 0.5× at 0.196–0.223, i.e. comparable to the paper's 0.165,
+not better; the old, unmodified regularizer gives 0.201–0.222 on the same
+runs, so nothing regressed — the 0.118 was simply a lucky draw. VECtor's
+run-to-run spread is wide enough that no single run means anything here.
+
+Two things follow.
 
 **The algorithm and this fork's changes are sound.** Given enough compute
-(0.5×), vision-only beats the paper's own published trajectory on its own
-data, without tuning anything.
+(0.5×), vision-only lands in the same range as the paper's own published
+trajectory on its own data, without tuning anything.
 
-**At 1× the failure is the rig's failure exactly.** The first 68 s track as
+**At 1× the failure was the rig's failure exactly.** The first 68 s track as
 well as the paper (ATE 0.154 against 0.131); the last 21 s blow up
 (1.116 against 0.078), and that is where the motion is fastest — mean gyro
 rate rises from ~0.10 rad/s at the start to 0.34 rad/s, peaks 0.75. Mapping
@@ -170,6 +177,40 @@ parameter — and `aa_window_ms` (A6) is the same story in reverse.
 
 The gyro rotation lock, this fork's own feature, does not help here (1.495):
 the failure is not the rotation-for-translation ambiguity it was built for.
+
+### A8. The regularizer was 93% of the mapping cycle
+
+Profiling that 2 Hz mapping cycle on VECtor gave, per cycle: regularization
+404–552 ms, block matching 11–14 ms, fusion 12–14 ms, the depth solve
+2.4–2.9 ms, denoising ~2 ms. The stage the rig had simply switched off was
+almost the whole cycle.
+
+`DepthRegularization::apply` walks every point in the map (15k–26k on
+VECtor) and, for each, scans a (2r+1)² neighbourhood — 1681 cells at the
+configured radius 20. Four changes, none touching the arithmetic
+(`f9bc34a`): run the per-point loop on `NUM_THREAD_MAPPING` threads, since
+each point reads the old map and writes only its own cell; reuse the
+neighbour buffers instead of a 13 kB allocation per point; clamp the scan's
+bounds once and walk each row through a single pointer instead of
+bounds-checking every cell and chasing `_grid[r]` three times; and compare
+squared distances, because `diff < 2*sqrt(var)` is `diff² < 4*var`.
+
+Regularization 404–552 → 50–107 ms, the cycle ~500 → 84–143 ms, ATE at 1×
+1.32–1.54 → 0.41–0.67. Most of that is the parallelisation; the scan and
+sqrt changes are worth little on their own.
+
+Two notes. The build was already `-O3` (`esvo2_core/CMakeLists.txt` sets it
+regardless of `CMAKE_BUILD_TYPE`, which the catkin cache leaves empty), so
+none of this was a missing compiler flag. And on the rig, whose map is ~750
+points rather than 20k, the stage now costs 5–6 ms and the whole cycle fits
+in 38–44 ms with regularization on — but the legs are unchanged
+(+1.04 / −0.93 against +1.02 / −0.96 with it off), so the rig config leaves
+it off.
+
+1× is still worse than 0.5× on VECtor (0.41–0.67 against ~0.21), so the map
+is still going stale there. Mapping's cycle at 84–143 ms against a
+`mapping_rate_hz` of 10 is the next thing to attack: fusion (12–16 ms) and
+block matching (11–14 ms) are now the largest stages.
 
 ## Part B — The live rig, 1280×720 at real time
 
