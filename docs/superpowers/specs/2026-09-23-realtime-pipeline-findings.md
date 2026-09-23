@@ -382,6 +382,79 @@ its images as loaded.
 | 0.5× | 1.02 m | −1.08 m | 0.06 m | −0.29 m |
 | 1×, with B1+B2 only (before the SGM, queue and callback fixes) | 0.54 m | −0.38 m | 0.21 m | — |
 
+## Part B2 — The hallway session: a miscalibrated rig
+
+A test with real depth variation and tape-measured ground truth: the rig on a
+wheeled cart in a hallway, facing an alcove whose front wall is 3.00 m away
+and whose back (two doors) is 4.10 m away, rolling along its optical axis.
+Bags in `/root/datasets/evk4/hallway*.bag`.
+
+**Sensor settings for a dim scene.** With the biases used for `slide4_bias`,
+the cameras produced 2.7–4.0 Mev/s *at rest* in the dim hallway, spread over
+200–270k pixels (noise, not hot pixels or flicker), and both hit the 4 Mev/s
+rate cap during motion, dropping events. `bias_diff_on/off: 20` cut the rest
+rate to 0.02–0.05 Mev/s while motion still gave 0.4–5 Mev/s. The later bags
+use those biases and an 8 Mev/s cap.
+
+**ESVO2 cannot handle the rig standing still.** With quiet biases, a still
+event camera sees nothing. On the stop-and-go bag (`hallway2`), tracking
+worked during every roll and reset continuously during every stop — about
+3,400 resets per run, at 0.5× as at 1×. Stereo initialisation found a median
+of 14 points at rest (it needs 500). Every leg was then measured between
+disconnected tracks. `slide4_bias` never showed this only because its noisy
+sensor kept firing at rest; the public datasets never show it because they
+are recorded in continuous motion. A continuous bag (`hallway3`: 4.10 →
+2.10 → 4.10 m twice, no stops) avoids it. The real fix — holding pose and map
+while the gyro says the rig is still — is not done yet.
+
+**The rig had lost its calibration.** On `hallway3`, forward legs came out
+~12% short with 0.3–0.5 m of closure error, identically at 0.5× and 1×. The
+map explained why: ~60% of its points sat at 7–9 m, in a scene with nothing
+beyond 4.10 m. In disparity space both walls were off by the same −29 px
+(measured 52–56 and 28–32 px against 82 and 60 px expected), the signature of
+a changed relative orientation rather than of false matches. The cause: the
+camera mounts had been swapped for identical ones after 2026-09-21.
+Recalibrating (`esvo2_core/scripts/calibration/`) found the right camera
+moved by ~0.70° yaw and 0.49° pitch, and the baseline grown from 146.6 to
+154.3 mm. With the new calibration (`calib/evk4_stereo_2026-09-23/`):
+
+| `hallway3`, forward, truth 2.00 m legs | Legs | Mean | Closure (z) |
+|---|---|---|---|
+| Old calibration | 1.46–2.11 | ~1.75 (−12%) | −0.29 / −0.49 m |
+| New calibration, 1×, 2 runs | 1.80–1.98 | ~1.87 (−6.5%) | +0.09 / +0.10 m |
+| New calibration, 0.5× | 1.69–1.92 | ~1.81 | +0.28 m |
+
+and the map now places the front wall at 2.75–3.25 m and the doors at
+4.00–4.25 m. The first leg is nearly exact (1.96–1.98 m); later legs are
+5–10% short, which is the next thing to understand. Sideways (`hallway4`,
+truth 1.00 m) the legs come out at 0.82–0.89 m with a 0.2–0.5 m forward or
+backward component. A cart pushed sideways on swivelling casters can crab, and
+each sideways leg is a separate track starting after the motion does, so that
+figure is not a clean measurement.
+
+**What this says about the earlier "z-drift".** The drift along the optical
+axis chased since 2026-09-21 was measured on a correctly calibrated rig and is
+not explained by this. But every rig result from after the mount swap and
+before this recalibration is invalid, and the IMU-to-camera rotation (`T_b_c`,
+used by the gyro lock) was not recalibrated and is probably stale too.
+
+**Dead ends in this session**, in order:
+- *"Forward motion is under-estimated because each frame's solve stops short
+  in the weak-flow direction."* Proposed from the 12% bias before the depth
+  check. The depths were wrong instead; with the calibration fixed, most of the
+  bias went.
+- *A one-angle software patch.* Fitting a single yaw (0.93°) to the two known
+  depths removed the drift (closure −0.02 m) but made the legs 24% short. It
+  was absorbing three changes — 0.70° yaw, 0.49° pitch and a 5% longer
+  baseline — into one parameter. Useful as a diagnosis, wrong as a fix.
+- *"Neither camera streams; a sync mode is stuck."* Both cameras streamed
+  fine. The test that seemed to show otherwise was broken twice over: its
+  timer started before opening the camera, which alone outlasts the window,
+  and it called `len()` on the SDK's buffer type.
+- The calibration tool's `LIBUSB_ERROR_TIMEOUT` was a consequence, not the
+  cause: its detection step ended at once and the error came from stopping
+  the camera abruptly. What made it work on the third try is not certain.
+
 ## Part C — Dead ends, in the order they were tried
 
 Recorded because each one cost time and none of them is obviously wrong in
@@ -450,7 +523,10 @@ single run misled this investigation more than once.
 
 ## Part E — Open
 
-- **Z-drift.** Closure along the optical axis is −0.41 to −0.79 m at 1× and
+- **Holding state at rest (B2).** The tracker resets whenever the rig stops.
+- **The remaining forward under-estimate (B2)**, 5–10% on later legs.
+- **`T_b_c` after the mount swap (B2)** is probably stale.
+- **Z-drift** (on the pre-swap rig). Closure along the optical axis was −0.41 to −0.79 m at 1× and
   −0.29 m at 0.5×, against a few cm in x. Map age drives it (C14), and the flat
   wall makes z the softest direction to absorb error. Untested: whether a scene
   with real depth variation removes it. That is the next bag to record.

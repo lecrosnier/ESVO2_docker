@@ -73,11 +73,17 @@ consistent with the baseline) but **not yet visually** on live time
 surfaces, so a rectification problem hasn't been ruled out as a cause of
 the poor SGM results.
 
-The calibration working files (raw detections, per-view errors, the
-`metavision_calibration_pipeline` JSON config used) live outside this repo
-in a scratch directory and were not preserved. The two YAML files are the
-only durable output. If you need to redo this (new rig, different baseline,
-lens change), the working method was:
+**Recalibrated 2026-09-23** after the camera mounts were swapped for
+identical ones: the right camera had moved ~0.7° in yaw and 0.5° in pitch,
+and the baseline had grown from 146.6 to 154.3 mm, enough to place a wall at
+4.10 m around 8 m away. The new calibration is `calib/evk4_stereo_2026-09-23/`
+(the Metavision outputs are kept alongside it) and is now the default for the
+rig's launch files. `calib/evk4_stereo/` keeps the earlier calibration, which
+is still the right one for every bag recorded before the swap (`slide4_bias`,
+the wall bags, the golden capture). The tools and the procedure are in
+`esvo2_core/scripts/calibration/` (README there), including a way to validate
+a calibration against tape-measured distances. The notes below describe the
+original method.
 
 1. Generate a chessboard pattern sized for your display's actual pixel
    pitch (so square size in meters is known exactly, not measured by eye).
