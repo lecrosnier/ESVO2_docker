@@ -1,21 +1,35 @@
 #!/usr/bin/env python3
 """Compare an estimated trajectory with ground truth.
 
-usage: eval_traj.py GT.txt POSES.bag [label]
+usage: eval_traj.py GT.txt EST(.bag|.txt) [label]     env: WIN="t0 t1"
   GT.txt     "t x y z qx qy qz qw" per line (results/gt/... format)
-  POSES.bag  /esvo2_tracking/pose_pub recorded during a replay
+  EST        /esvo2_tracking/pose_pub recorded during a replay, or a
+             trajectory in the same text format (e.g. results/ours/...)
+  WIN        score only this absolute time window, for comparing against a
+             published trajectory that covers part of the sequence
 Poses are matched to ground truth within 20 ms. Path length is measured on
 0.5 s samples so per-frame jitter does not inflate it. Prints the path ratio
 (estimate / ground truth), the Sim3 scale, and ATE after SE3 and Sim3 alignment.
 """
+import os
 import sys
 import numpy as np
 import rosbag
 
-gt = np.loadtxt(sys.argv[1])[:, :4]
-est = np.array([(m.header.stamp.to_sec(), m.pose.position.x, m.pose.position.y, m.pose.position.z)
-                for _, m, _ in rosbag.Bag(sys.argv[2]).read_messages(topics=["/esvo2_tracking/pose_pub"])])
+def load(path):
+    if not path.endswith(".bag"):
+        return np.loadtxt(path)[:, :4]
+    return np.array([(m.header.stamp.to_sec(), m.pose.position.x, m.pose.position.y, m.pose.position.z)
+                     for _, m, _ in rosbag.Bag(path).read_messages(topics=["/esvo2_tracking/pose_pub"])])
+
+
+gt = load(sys.argv[1])
+est = load(sys.argv[2])
 label = sys.argv[3] if len(sys.argv) > 3 else sys.argv[2]
+
+if os.environ.get("WIN"):
+    t0, t1 = map(float, os.environ["WIN"].split())
+    est = est[(est[:, 0] >= t0) & (est[:, 0] <= t1)]
 
 i = np.clip(np.searchsorted(gt[:, 0], est[:, 0]), 1, len(gt) - 1)
 i = np.where(np.abs(gt[i - 1, 0] - est[:, 0]) < np.abs(gt[i, 0] - est[:, 0]), i - 1, i)

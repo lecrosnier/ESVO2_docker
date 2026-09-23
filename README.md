@@ -6,7 +6,9 @@ This repository delivers **ESVO2**, an event-based stereo visual-inertial odomet
 
 This fork runs ESVO2 live on a hardware-synced stereo pair of **Prophesee EVK4** (IMX636, 1280x720) event cameras with an **SBG** IMU, on ROS Noetic. The full details are in **[EVK4_STEREO_SETUP.md](EVK4_STEREO_SETUP.md)**: calibration, every change made, pitfalls found along the way, and known limitations.
 
-**Status:** the whole pipeline runs, and the crashes and memory leak found so far are fixed. Pose estimation is **not reliable yet**. Stereo initialization succeeds, but the local map then shrinks below the 300 points tracking needs, so the system keeps resetting. IMU fusion is disabled (`USE_IMU: False`) because it diverged, and the IMU-to-camera extrinsics (`T_b_c`) are still uncalibrated.
+**Status (2026-09-23):** the pipeline runs in real time and tracking holds. On a 1 m out-and-back slide replayed at 1x, the rig now recovers +1.02 / -0.96 m per leg with no tracking resets, against 41-45% of the true translation a few days earlier; on MVSEC `indoor_flying1` this build matches the paper's published trajectory (ATE 7.9 cm against 7.6 cm). What got it there — data rates, stale maps from subscriber-queue backlog, and full-frame work nobody consumed — is written up in [docs/superpowers/specs/2026-09-23-realtime-pipeline-findings.md](docs/superpowers/specs/2026-09-23-realtime-pipeline-findings.md), together with the hypotheses that turned out to be wrong.
+
+Still open: drift along the optical axis (0.3-0.8 m of closure error on a 2.3 m round trip, against a few cm sideways), which is worst against the flat wall these bags were recorded on. IMU fusion stays disabled (`USE_IMU: False`): ESVO2's tracking-side IMU prediction diverges upstream, on MVSEC as well as here (see the findings doc). The IMU-to-camera rotation is calibrated; the lever arm is not.
 
 **Main additions:**
 - `esvo2_core/calib/evk4_stereo/`: stereo calibration for the EVK4 rig.

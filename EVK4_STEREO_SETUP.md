@@ -202,14 +202,23 @@ the same paths in the `sbg_ros_driver` clone.
     our 156 mm baseline)
   - `BM_max_disparity: 320` (was 150, to reach those nearer depths; must
     stay divisible by 16 for `cv::StereoSGBM`, and costs CPU)
+  - `TS_QUEUE_SIZE: 2`, `SGM_DOWNSAMPLE: 2`, `NUM_THREAD_MAPPING: 8`,
+    `MAPPING_FLOAT: True` (all added 2026-09-23; each one is measured in
+    the findings doc under "Real-time pipeline"). The first two are the
+    ones that matter most: deep subscriber queues made mapping run a fixed
+    ~200 ms behind the stream, and full-resolution SGM cost ~2 s per
+    initialization attempt.
 - **New:** `esvo2_core/cfg/tracking/tracking_evk4_AA.yaml`: copy of the
   previously unused `tracking_online_AA.yaml` template with `USE_IMU: False`
   and `PATH_TO_SAVE_TRAJECTORY: /root/esvo2_output/`.
 - **New:** `esvo2_core/launch/system/system_evk4_mapping.launch`: the live
   pipeline: image_representation (left/right) → mapping → tracking → rviz,
-  wired to `/evk4_left|right/events`, `use_sim_time=false`. It overrides
-  `generation_rate_hz` to 25 for both image_representation nodes (the
-  shared cfg's 100 Hz is unreachable here; see "Gotchas"). No IMU remap is
+  wired to `/evk4_left|right/events`, `use_sim_time=false`. It takes
+  `ts_rate` (the `generation_rate_hz` of both image_representation nodes),
+  `aa_window_ms` and `opencv_threads` as arguments. `ts_rate` was 25 until
+  2026-09-23, when the nodes became fast enough for 50; the tracking rate
+  follows it, and it is worth most of the accuracy (see the findings doc
+  under "Real-time pipeline"). No IMU remap is
   needed: the SBG driver publishes `/imu/data`, the absolute topic that
   `esvo2_Mapping`/`esvo2_Tracking` subscribe to.
 - **Fixed:** `esvo2_core/src/core/BackendOptimization.cpp`: two defensive
@@ -323,6 +332,24 @@ the same paths in the `sbg_ros_driver` clone.
 > also has local edits; it was left untouched.
 
 ## Gotchas discovered along the way
+
+- **Real-time pipeline: latency, not throughput (2026-09-23).** Five
+  separate defects each cost most of the tracked translation, and none of
+  them showed up at slow replay: mapping's six image subscriber queues of
+  10 let it work through a 200 ms backlog instead of skipping to the newest
+  frame (so the tracker registered against maps 300-400 ms old); SGM ran
+  over the full frame and the whole disparity range, ~2 s per attempt, so
+  initialization missed the start of every motion; the AA map covered only
+  the events since the previous render, so raising the rate starved the
+  candidate points; the mapping node converted six full frames to double
+  Eigen matrices for every time surface while using ~40% of them; and the
+  tracker rendered an 11 ms debug image per frame with nobody subscribed.
+  The full account, with the measurements and the hypotheses that turned
+  out to be wrong, is in
+  [docs/superpowers/specs/2026-09-23-realtime-pipeline-findings.md](docs/superpowers/specs/2026-09-23-realtime-pipeline-findings.md).
+  Two habits from it are worth keeping: replay at 0.5x as a compute-free
+  control (everything is in sim time, so the slower replay only buys
+  wall-clock), and repeat runs, because run-to-run variance at 1x is large.
 
 - **The camera sides were swapped (fixed 2026-09-18).** `stereo.launch`
   published serial `00051182` as left, but covering each lens showed it is
@@ -565,6 +592,23 @@ the same paths in the `sbg_ros_driver` clone.
   (5 runs each side) put both builds in the same range, ratio 0.76–1.13,
   with 1–2 of 5 runs on either build hitting a burst of ~24–32 tracking
   re-initializations — this predates the gyro-lock work.
+  Followed up on 2026-09-23, and three of those observations were
+  artefacts: the crash was a `size_t` underflow when the global point cloud
+  is empty (fixed, `167ad8f`); the uninitialized `Ba` is denormal, i.e.
+  effectively zero, so cosmetic; and the IMU was never reaching the nodes
+  at all, because `system_upenn.launch` remaps `imu` for the representation
+  nodes but not `/imu/data`, which is what mapping and tracking subscribe
+  to (`system_vector.launch` does remap it). With the IMU genuinely
+  connected, the mapping back end alone is harmless (ATE 9.0 cm against
+  7.9 cm vision-only) and the tracking-side prediction is what diverges: it
+  integrates raw accelerometer readings with gravity left in, adds the
+  result in the body frame without rotating it into the world, and stacks
+  that on a constant-velocity term. The extrinsics are not the cause — the
+  gyro-to-camera rotation fits ground truth within 3° of the identity that
+  `calib/upenn` declares. Vision-only MVSEC tracking also stopped being
+  erratic once the events were repacked (see the findings doc, Part A):
+  it now matches the paper's published trajectory, ATE 7.9 cm against
+  7.6 cm.
 - **`rosparam load` doesn't clear keys missing from the new file.** Because a
   `roscore` stays up across separate `roslaunch` invocations (e.g. between
   replay runs), a key set by one config (say `IMU_ROTATION_LOCK: True` from a
@@ -589,7 +633,28 @@ the same paths in the `sbg_ros_driver` clone.
 
 ## Known limitations / next steps
 
-- **Pose estimation doesn't stay up.** Mapping must get at least
+- **Where tracking stands (2026-09-23).** The rig tracks in real time with
+  no resets. On `slide4_bias.bag` replayed at 1x, a 1 m out-and-back slide
+  (true legs ~1.17 m each, a 1.03 m move plus a 0.14 m step) recovers
+  +1.02 / -0.96 m and +1.03 / -0.93 m over two runs, against +0.54 /
+  -0.38 m before the 2026-09-23 latency work, and 41-45% of the true
+  translation on 2026-09-21. At 0.5x replay it recovers +1.02 / -1.08 m, so a little
+  compute headroom is still missing, but the gap is now small. The bullet
+  below describes the state before that work and is kept for its analysis
+  of the block-matching suspects, most of which were not the cause.
+
+- **Drift along the optical axis is the open problem.** Closure error on
+  the 2.3 m round trip is 0.3-0.8 m in z at 1x (0.29 m at 0.5x), against a
+  few cm in x. It tracks the age of the map the tracker registers against:
+  forcing a 168 ms map age at 0.5x, where the legs stay correct, moves
+  closure in z from -0.06 m to -0.79 m. These bags are all recorded facing
+  a flat, textured wall at ~1.9 m, which is the geometry that makes depth
+  the softest direction; whether the drift survives in a scene with real
+  depth variation is untested, and that is the next bag to record.
+
+- **Pose estimation doesn't stay up** (superseded by the two bullets above;
+  kept for its suspect list, most of which was not the cause). Mapping must
+  get at least
   `INIT_SGM_DP_NUM_THRESHOLD` (500) SGM depth points to initialize. With
   the DVXplorer depth/disparity ranges it got 30–95 per attempt; after
   widening them (see "Changes made") it initializes intermittently: 28 of
