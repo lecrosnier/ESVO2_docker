@@ -129,6 +129,7 @@ if(CATKIN_ENABLE_TESTING)
   esvo2_core_add_lib_gtest(test_mapping_equivalence)
   esvo2_core_add_lib_gtest(test_bm_float)
   esvo2_core_add_lib_gtest(test_depth_float)
+  esvo2_core_add_lib_gtest(test_depth_regularization)
   cs_add_executable(bench_mapping_float test/bench_mapping_float.cpp)
   target_link_libraries(bench_mapping_float ${PROJECT_NAME}_LIB
     ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp)

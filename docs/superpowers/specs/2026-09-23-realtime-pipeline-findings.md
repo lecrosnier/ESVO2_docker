@@ -143,7 +143,8 @@ Scored over the published trajectory's window (89.1 s), ATE SE3 / Sim3:
 | Ours, vision-only, 0.5× replay, 3 runs | 0.196–0.223 / 0.165–0.208 | 0.81–0.82 |
 | Ours, vision-only, 1×, 4 runs | 1.32–1.54 / 0.30–0.33 | 1.59–1.68 |
 | Ours, 1×, lighter mapping (`BM_step: 3`, regularization off) | 0.240 / 0.220 | 0.80 |
-| **Ours, 1×, after the regularizer work (A8), 4 runs** | **0.41–0.67 / 0.29–0.31** | **0.94–1.11** |
+| Ours, 1×, after the regularizer work (A8), 4 runs | 0.41–0.67 / 0.29–0.31 | 0.94–1.11 |
+| **Ours, 1×, regularization off (A9), 2 runs** | **0.210–0.227 / 0.186–0.206** | **0.81** |
 | Upstream IMU mode (`USE_IMU: True`) | mapping segfaults ~2 s in | — |
 
 A caution about single runs, since this one caught me out: the first 0.5×
@@ -207,10 +208,38 @@ in 38–44 ms with regularization on — but the legs are unchanged
 (+1.04 / −0.93 against +1.02 / −0.96 with it off), so the rig config leaves
 it off.
 
-1× is still worse than 0.5× on VECtor (0.41–0.67 against ~0.21), so the map
-is still going stale there. Mapping's cycle at 84–143 ms against a
-`mapping_rate_hz` of 10 is the next thing to attack: fusion (12–16 ms) and
-block matching (11–14 ms) are now the largest stages.
+`test/test_depth_regularization.cpp` pins the result: on nine random
+VECtor-sized maps (≈19k points, Tdist at radius 20 and l2 at radius 5, one
+and four threads) the optimised regularizer matches a verbatim copy of the
+upstream algorithm bit for bit — including the squared-distance comparison,
+which is equivalent in exact arithmetic but could in principle flip at a
+floating-point boundary; it never did. In isolation it scales: ~100 ms
+single-threaded against 27 ms on four threads. Live it takes 50–107 ms for
+similar map sizes, so contention with the other nodes costs it a factor of
+2–4 there, and eight threads are no faster than four.
+
+### A9. On VECtor, regularization is not worth its cost
+
+Before optimising the regularizer further, the question was whether it buys
+anything. Isolating that one setting (`Regularization: False`, everything
+else stock), ATE SE3 over the published window:
+
+| | 0.5× | 1× |
+|---|---|---|
+| Regularization on | 0.196, 0.222, 0.223 | 0.41–0.67 (4 runs) |
+| Regularization off | 0.228, 0.228 | 0.227, 0.210 |
+
+At 0.5× the difference is within run-to-run noise, and at 1× turning it off
+**closes the real-time gap completely**: 1× matches 0.5×. The rig reached the
+same conclusion for the same reason (Part B). The upstream dataset configs
+are left as upstream ships them; to run VECtor in real time on this machine,
+set `Regularization: False` in `mapping_vector_AA.yaml` (and `USE_IMU: False`,
+since upstream's IMU mode crashes — A5, A7).
+
+Against the paper's published 0.165 m, ours at 0.21–0.23 m is vision-only and
+the paper's is not; the remaining difference is plausibly the IMU, which we
+cannot run (A5). The regularizer work of A8 stays: it is exact, tested, and
+makes regularization affordable if a scene turns out to need it.
 
 ## Part B — The live rig, 1280×720 at real time
 
