@@ -510,6 +510,17 @@ the same paths in the `sbg_ros_driver` clone.
   Fixed with guards that skip the optimization until enough history exists.
   The underlying unsynchronized deque access is still there; the guards
   only stop it from crashing.
+- **ESVO2's IMU mode also diverged on the tracking side (fixed
+  2026-09-23).** With `USE_IMU: True`, the tracker adds the moving average
+  of the last five registered displacements to every frame's translation
+  prior, unbounded, so one bad registration step turns into velocity and
+  compounds. It reached 6e6 m on MVSEC and up to 1e11 m on VECtor, and the
+  mapping node crashed in every such run. `IMU_CONSTANT_VELOCITY_PRIOR`
+  (default false) removes the term; with it off, IMU mode tracks MVSEC and
+  VECtor as well as vision-only and improves VECtor's path recovery (ratio
+  0.81 -> 0.89-0.93). Full account in the findings doc, section A5. The rig
+  still runs `USE_IMU: False` (lever arm uncalibrated), and the gyro lock
+  remains the rig's way of using the IMU.
 - **`image_representation` leaks memory through an unbounded subscriber
   queue.** After ~3.5 days running, `image_representation_left` was at
   11.1 GB RSS and `_right` at 2.2 GB, with the container near OOM. The

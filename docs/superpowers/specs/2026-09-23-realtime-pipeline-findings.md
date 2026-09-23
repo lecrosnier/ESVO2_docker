@@ -39,7 +39,8 @@ script: **ATE 7.6 cm, path ratio 0.99** over a 25.8 s window
 | Ours, vision-only, original bag | 42–62 cm | 0.74–0.79 |
 | **Ours, vision-only, events repacked to 5 ms** | **7.9 cm** | **0.98** |
 | Ours, IMU in the mapping back end only | 9.0 cm | 0.97 |
-| Ours, IMU in tracking | diverges | — |
+| Ours, IMU in tracking, upstream code | diverges | — |
+| Ours, IMU in tracking, after the fix of A5 | 0.082 / 0.079 | 0.96 |
 
 ### A1. Event packing decides the tracking rate
 
@@ -77,23 +78,72 @@ empty voxel-filtered cloud, as happens right after a tracking reset, made
 `std::length_error`, aborting the mapping node. Fixed in `167ad8f` (on the base
 branch). The EVK4 config has that flag off, which is why the rig never hit it.
 
-### A5. ESVO2's IMU tracking path diverges (not fixed)
+### A5. ESVO2's IMU tracking path diverged (fixed in `aa2d54b`)
 
-With the IMU actually connected, tracking diverges on MVSEC: positions reach
-10^5 m and the map resets hundreds of times. The mapping back end alone is
-harmless (ATE 9.0 cm vs 7.9 cm vision-only), so the problem is the tracking-side
-prediction in `esvo2_Tracking::curImuTransferring` / the `bUseImu_` branch:
+With the IMU actually connected, upstream's `USE_IMU` mode diverged on both
+public datasets: 6×10⁶ m within 10 s on MVSEC `indoor_flying1`, 5×10² to
+10¹¹ m on VECtor `desk-normal`, and the mapping node crashed in every such run
+observed. The mapping back end alone was never the problem.
 
-- `Imu_t` is the preintegrated `delta_p`, integrated from raw accelerometer
-  readings with gravity left in (`imu_integration.h` never subtracts `G` there);
-- it is added in the body/camera frame, never rotated into the world frame;
-- it is added on top of a constant-velocity term (`last_t_`), whose own errors
-  feed back into the next frame.
+**Root cause.** In the `bUseImu_` branch of `curDataTransferring()`, every
+frame's translation prior is
 
-The IMU-to-camera rotation is not the cause: fitted against ground-truth
-angular velocity, it is within 3° of identity, which is what `calib/upenn`
-declares. This is upstream behaviour, unmodified by this fork, and it is why
-`USE_IMU: False` remains right for the rig.
+    prior = R_b_c^T · Δp_imu  +  mean(last five registered displacements)
+
+and the second term is unbounded. Instrumenting both terms per frame showed
+the divergence always starting with one bad registration step (130 mm, later
+266–398 mm). That step entered the moving average, the next frame started
+tens of centimetres off, registered wrong again, and the error compounded
+until it ran away. Vision-only mode has no such term, which is why it was
+stable all along.
+
+**How it was confirmed.** Removing only that term, on both datasets, stopped
+the divergence and every crash (0 in 10 runs, against 3 crashes in 3 runs with
+it). Restoring it through the new parameter reproduces the divergence
+(3.9×10⁷ m) and the crash. `IMU_CONSTANT_VELOCITY_PRIOR` (default false)
+controls it; `true` is upstream's behaviour.
+
+**Results with the fix**, stock configs, ATE SE3 / Sim3:
+
+| Sequence | IMU mode, fixed | Vision-only | Paper |
+|---|---|---|---|
+| MVSEC `indoor_flying1` | 0.082 / 0.079, ratio 0.96 | 0.079 | 0.076 / 0.076, 0.99 |
+| MVSEC `indoor_flying2` | 0.141 / 0.075, ratio 0.93 | 0.107–0.126 | 0.100 / 0.066, 0.96 |
+| MVSEC `indoor_flying3` | 0.073 / 0.046, ratio 0.97 | 0.068–0.074 | 0.073 / 0.049, 0.95 |
+| VECtor `desk-normal`, 3 runs* | 0.198–0.224, ratio 0.89–0.93 | 0.210–0.227, ratio 0.81 | 0.165 / 0.146, 0.89 |
+
+\* with `Regularization: False` (A9).
+
+IMU mode now matches vision-only on ATE, and on VECtor the gyro rotation prior
+lifts path recovery from 0.81 to the paper's 0.89. It does not close the
+remaining ATE gap to the paper on VECtor (0.20–0.22 against 0.165), so that gap
+is not explained by the IMU after all.
+
+**Checked and not significant — left as they are:**
+
+- *Gravity in the IMU displacement.* `Δp_imu` is preintegrated from raw
+  accelerometer readings without subtracting gravity, so it carries a constant
+  ~0.3 mm per frame (½·g·Δt²) whatever the motion. It is a real defect, but
+  dropping the term entirely changed nothing measurable (ATE 0.200–0.209
+  against 0.203–0.235): registration absorbs it.
+- *The IMU-integrated velocity* in `curImuTransferring()` accumulates
+  `Δv` with gravity in it and grows at roughly g between back-end updates
+  (to ~40 m/s). It is never used: the consistency check that would select it
+  fails on every frame.
+- *The crash.* All three crashes observed were in runs with the velocity prior
+  on; none in ten runs without it. That is consistent with the crash being
+  downstream of the divergence (absurd poses reaching the map), but it was
+  never caught in the act: under gdb the node slowed enough that it did not
+  crash at all, and glog's failure signal handler caught nothing in the runs
+  that followed. Treat it as unexplained if it ever reappears with the prior
+  off; the first suspect would then be the unsynchronised access to the
+  depth-point deque that the back end's Ceres solve shares with the mapping
+  thread, which `EVK4_STEREO_SETUP.md` records as guarded but not fixed.
+
+Two traps from this investigation: gdb changed the timing enough to hide the
+crash, and `tracking_vector_AA.yaml` has no trailing newline, so appending a
+key with `>>` silently produced `USE_IMU: TrueNEW_KEY: ...`, invalid YAML, and
+a run that recorded nothing.
 
 ### A6. Checked on two sequences this fork had never run
 
@@ -145,7 +195,8 @@ Scored over the published trajectory's window (89.1 s), ATE SE3 / Sim3:
 | Ours, 1×, lighter mapping (`BM_step: 3`, regularization off) | 0.240 / 0.220 | 0.80 |
 | Ours, 1×, after the regularizer work (A8), 4 runs | 0.41–0.67 / 0.29–0.31 | 0.94–1.11 |
 | **Ours, 1×, regularization off (A9), 2 runs** | **0.210–0.227 / 0.186–0.206** | **0.81** |
-| Upstream IMU mode (`USE_IMU: True`) | mapping segfaults ~2 s in | — |
+| Upstream IMU mode (`USE_IMU: True`) | diverges or segfaults; fixed in A5 | — |
+| IMU mode after the A5 fix, regularization off, 3 runs | 0.198–0.224 / 0.191–0.213 | 0.89–0.93 |
 
 A caution about single runs, since this one caught me out: the first 0.5×
 run scored 0.118 and I reported that this build beats the paper on its own
@@ -234,7 +285,8 @@ At 0.5× the difference is within run-to-run noise, and at 1× turning it off
 same conclusion for the same reason (Part B). The upstream dataset configs
 are left as upstream ships them; to run VECtor in real time on this machine,
 set `Regularization: False` in `mapping_vector_AA.yaml` (and `USE_IMU: False`,
-since upstream's IMU mode crashes — A5, A7).
+which was needed until the IMU fix of A5; with it, `USE_IMU: True` works and
+improves path recovery).
 
 Against the paper's published 0.165 m, ours at 0.21–0.23 m is vision-only and
 the paper's is not; the remaining difference is plausibly the IMU, which we
@@ -405,5 +457,7 @@ single run misled this investigation more than once.
 - **Remaining latency.** Map age is ~150 ms at 1× against 65–78 ms at 0.5×:
   mapping's cycle (~60 ms) plus surface delivery (~70 ms). No GPU work is
   justified until the z-drift is understood.
-- **The IMU tracking path** (A5) is still broken upstream and unused here.
+- **`USE_IMU` on the rig** is untested since the fix (A5). The rig's IMU-to-camera
+  lever arm is uncalibrated and its event stream lags the IMU by ~5.5 s in the
+  recorded bags, so it needs checking before it is trusted there.
 - **MVSEC's IMU mode** remains non-deterministic run to run.
