@@ -1,0 +1,7 @@
+{
+  "type": "Chessboard",
+  "width": 9,
+  "height": 6,
+  "square-width": 0.025797,
+  "square-height": 0.025759
+}

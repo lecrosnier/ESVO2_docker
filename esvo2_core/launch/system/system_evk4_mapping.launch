@@ -18,7 +18,11 @@
   <arg name="opencv_threads" default="0"/>
 
   <!-- Calibration folder -->
-  <arg name="calibInfoDirStr" default="$(find esvo2_core)/calib/evk4_stereo"/>
+  <!-- The camera mounts were swapped before 2026-09-23 and the rig was
+       recalibrated then (right camera ~0.7 deg yaw, 0.5 deg pitch, baseline
+       146.6 -> 154.3 mm). Bags recorded before that (slide4_bias, the wall
+       bags, the golden capture) need calibInfoDirStr:=.../calib/evk4_stereo. -->
+  <arg name="calibInfoDirStr" default="$(find esvo2_core)/calib/evk4_stereo_2026-09-23"/>
   <!-- gui:=false skips rqt and rviz (headless) -->
   <arg name="gui" default="true"/>
 

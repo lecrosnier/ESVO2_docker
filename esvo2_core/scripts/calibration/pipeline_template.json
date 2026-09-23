@@ -1,0 +1,131 @@
+{
+  "calibration-steps": [
+    {
+      "skip": false,
+      "name": "eb-pattern-detection",
+      "description": "Record data for EB intrinsics calibration (master / left, serial 00051860)",
+      "output-dir": "CALIB_DIR/master",
+      "reload": false,
+      "skip-time-us": 2000000,
+      "camera": {
+        "slice-duration-us": 100000,
+        "device-id": "00051860",
+        "record": false,
+        "record-dir": "CALIB_DIR/master"
+      },
+      "pattern-path": "CALIB_DIR/pattern.json",
+      "pattern-detector": {
+        "type": "blinking-chessboard"
+      },
+      "pattern-renderer": {
+        "overlay-convex-hull": false
+      }
+    },
+    {
+      "skip": false,
+      "name": "intrinsics-estimation",
+      "description": "Estimate camera intrinsics (master / left)",
+      "input-dir": "CALIB_DIR/master",
+      "output-dir": "CALIB_DIR/master",
+      "estimator": {
+        "type": "pinhole",
+        "flags": 130,
+        "outlier-ths": 2.0
+      }
+    },
+    {
+      "skip": false,
+      "name": "intrinsics-validation",
+      "description": "Visual validation of camera intrinsics (master / left)",
+      "input-dir": "CALIB_DIR/master"
+    },
+    {
+      "skip": false,
+      "name": "eb-pattern-detection",
+      "description": "Record data for EB intrinsics calibration (slave / right, serial 00051182)",
+      "output-dir": "CALIB_DIR/slave",
+      "reload": false,
+      "skip-time-us": 2000000,
+      "camera": {
+        "slice-duration-us": 100000,
+        "device-id": "00051182",
+        "record": false,
+        "record-dir": "CALIB_DIR/slave"
+      },
+      "pattern-path": "CALIB_DIR/pattern.json",
+      "pattern-detector": {
+        "type": "blinking-chessboard"
+      },
+      "pattern-renderer": {
+        "overlay-convex-hull": false
+      }
+    },
+    {
+      "skip": false,
+      "name": "intrinsics-estimation",
+      "description": "Estimate camera intrinsics (slave / right)",
+      "input-dir": "CALIB_DIR/slave",
+      "output-dir": "CALIB_DIR/slave",
+      "estimator": {
+        "type": "pinhole",
+        "flags": 130,
+        "outlier-ths": 2.0
+      }
+    },
+    {
+      "skip": false,
+      "name": "intrinsics-validation",
+      "description": "Visual validation of camera intrinsics (slave / right)",
+      "input-dir": "CALIB_DIR/slave"
+    },
+    {
+      "skip": false,
+      "name": "eb-synced-pattern-detection",
+      "description": "Record synced data for extrinsics calibration",
+      "output-dir": "CALIB_DIR/extrinsics",
+      "reload": false,
+      "skip-time-us": 2000000,
+      "synced-cameras": {
+        "slice-duration-us": 100000,
+        "record": false,
+        "record-dir": "",
+        "devices": [
+          {
+            "id": "00051860",
+            "settings-file": "CALIB_DIR/neutral_settings.json"
+          },
+          {
+            "id": "00051182",
+            "settings-file": "CALIB_DIR/neutral_settings.json"
+          }
+        ]
+      },
+      "pattern-configs": [
+        {
+          "pattern-path": "CALIB_DIR/pattern.json",
+          "pattern-detector": {
+            "type": "blinking-chessboard"
+          },
+          "pattern-renderer": {
+            "overlay-convex-hull": false
+          }
+        }
+      ]
+    },
+    {
+      "skip": false,
+      "name": "extrinsics-estimation",
+      "output-dir": "CALIB_DIR/extrinsics",
+      "camera-configs": [
+        {
+          "camera-geometry-path": "CALIB_DIR/master/camera-geometry.json",
+          "detections-path": "CALIB_DIR/extrinsics/master/detections.json"
+        },
+        {
+          "camera-geometry-path": "CALIB_DIR/slave/camera-geometry.json",
+          "detections-path": "CALIB_DIR/extrinsics/slave-0/detections.json"
+        }
+      ]
+    }
+  ]
+}
