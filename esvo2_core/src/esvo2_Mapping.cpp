@@ -734,6 +734,7 @@ namespace esvo2_core
                 it_end->second.setTransformation(tr_last);
                 if (!it_end->second.isEmpty())
                 {
+                  it_end->second.ensureEigen(); // reads its matrices below
                   TS_obs_ptr_->second.tr_last_ = it_end->second.tr_;
                   TS_obs_ptr_->second.TS_last_ = it_end->second.AA_map_;
                   TS_obs_ptr_->second.TS_last_du = it_end->second.dTS_du_left_;
@@ -761,6 +762,10 @@ namespace esvo2_core
     }
     if (TS_obs_ptr_->second.isEmpty())
       return false;
+    // Everything downstream (block matching, the depth solves, the golden
+    // capture) reads this observation's matrices, so fill them now: only the
+    // selected observation pays for the conversion.
+    TS_obs_ptr_->second.ensureEigen();
 
     std::vector<pair<double, Eigen::Vector3d>> accVector, gyrVector;
     double curTime = TS_obs_ptr_->first.toSec();
@@ -982,6 +987,7 @@ namespace esvo2_core
       const sensor_msgs::ImageConstPtr &time_surface_negative_dx,
       const sensor_msgs::ImageConstPtr &time_surface_negative_dy)
   {
+
     std::lock_guard<std::mutex> lock(data_mutex_);
     // check time-stamp inconsistency
     if (!TS_history_.empty())

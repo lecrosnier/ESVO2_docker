@@ -139,38 +139,56 @@ struct TimeSurfaceObservation
     bool bCalcTsGradient = false)
     : id_(id)
   {
+    // Keep the images and convert on demand: this constructor runs for every
+    // time surface the mapping node receives (50 Hz on the EVK4 rig), while
+    // mapping uses only the observations dataTransferring() selects (~20 Hz).
+    // Converting six 1280x720 frames into double matrices for all of them cost
+    // 17-19 ms per frame and put the node behind the stream. ensureEigen()
+    // must be called before any of the matrices below is read.
     cvImagePtr_left_ = left;
     cvImagePtr_right_ = right;
     cvImagePtr_AA_map_ = AA_map;
+    cvImagePtr_negative_ = negative;
+    cvImagePtr_negative_dx_ = negative_dx;
+    cvImagePtr_negative_dy_ = negative_dy;
+    bCalcTsGradient_ = bCalcTsGradient;
+    bEigenReady_ = false;
+    bSubNegaTS_ = false;
+  }
 
-    cv::cv2eigen(left->image, TS_left_);
-    cv::cv2eigen(right->image, TS_right_);
-    cv::cv2eigen(AA_map->image, AA_map_);
-    cv::cv2eigen(negative_dx->image, dTS_negative_du_left_);
-    cv::cv2eigen(negative_dy->image, dTS_negative_dv_left_);
-    cv::cv2eigen(negative->image, TS_negative_left_);
-    // cv::imshow("mapping_negative", negative->image);
-    // cv::waitKey(1);
-    if (bCalcTsGradient)
+  // Fill the Eigen views of the images this observation was built from. Cheap
+  // and idempotent after the first call; a no-op for observations whose
+  // matrices were set directly.
+  inline void ensureEigen()
+  {
+    if (bEigenReady_)
+      return;
+    bEigenReady_ = true;
+    if (cvImagePtr_left_ == nullptr || cvImagePtr_right_ == nullptr)
+      return;
+
+    cv::cv2eigen(cvImagePtr_left_->image, TS_left_);
+    cv::cv2eigen(cvImagePtr_right_->image, TS_right_);
+    if (cvImagePtr_AA_map_ != nullptr)
+      cv::cv2eigen(cvImagePtr_AA_map_->image, AA_map_);
+    if (cvImagePtr_negative_dx_ != nullptr)
+      cv::cv2eigen(cvImagePtr_negative_dx_->image, dTS_negative_du_left_);
+    if (cvImagePtr_negative_dy_ != nullptr)
+      cv::cv2eigen(cvImagePtr_negative_dy_->image, dTS_negative_dv_left_);
+    if (cvImagePtr_negative_ != nullptr)
+      cv::cv2eigen(cvImagePtr_negative_->image, TS_negative_left_);
+
+    if (bCalcTsGradient_)
     {
-#ifdef TIME_SURFACE_OBSERVATION_LOG
-      TicToc tt;
-      tt.tic();
-#endif
-      cv::Sobel(left->image, cv_dTS_du_left_, CV_64F, 1, 0);
-      cv::Sobel(left->image, cv_dTS_dv_left_, CV_64F, 0, 1);
+      cv::Sobel(cvImagePtr_left_->image, cv_dTS_du_left_, CV_64F, 1, 0);
+      cv::Sobel(cvImagePtr_left_->image, cv_dTS_dv_left_, CV_64F, 0, 1);
       cv::cv2eigen(cv_dTS_du_left_, dTS_du_left_);
       cv::cv2eigen(cv_dTS_dv_left_, dTS_dv_left_);
-      cv::Sobel(right->image, cv_dTS_du_right_, CV_64F, 1, 0);
-      cv::Sobel(right->image, cv_dTS_dv_right_, CV_64F, 0, 1);
+      cv::Sobel(cvImagePtr_right_->image, cv_dTS_du_right_, CV_64F, 1, 0);
+      cv::Sobel(cvImagePtr_right_->image, cv_dTS_dv_right_, CV_64F, 0, 1);
       cv::cv2eigen(cv_dTS_du_right_, dTS_du_right_);
       cv::cv2eigen(cv_dTS_dv_right_, dTS_dv_right_);
-
-#ifdef TIME_SURFACE_OBSERVATION_LOG
-      LOG(INFO) << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@Sobel computation (" << id_ << ") takes " << tt.toc() << " ms.";
-#endif
     }
-    bSubNegaTS_ = false;
   }
 
   TimeSurfaceObservation()
@@ -178,6 +196,9 @@ struct TimeSurfaceObservation
 
   inline bool isEmpty()
   {
+    // An observation built from images is not empty even before ensureEigen().
+    if(cvImagePtr_left_ != nullptr && cvImagePtr_right_ != nullptr)
+      return false;
     if(TS_left_.rows() == 0 || TS_left_.cols() == 0 || TS_right_.rows() == 0 || TS_right_.cols() == 0)
       return true;
     else
@@ -258,6 +279,10 @@ struct TimeSurfaceObservation
   Eigen::MatrixXd TS_blurred_left_;
   Eigen::MatrixXd TS_negative_left_;
   cv_bridge::CvImagePtr cvImagePtr_left_, cvImagePtr_right_, cvImagePtr_last_, cvImagePtr_AA_map_;
+  cv_bridge::CvImagePtr cvImagePtr_negative_, cvImagePtr_negative_dx_, cvImagePtr_negative_dy_;
+  // false only between the six-image constructor and ensureEigen()
+  bool bEigenReady_ = true;
+  bool bCalcTsGradient_ = false;
   Transformation tr_, tr_last_, tr_ori_;
   Eigen::MatrixXd dTS_du_left_, dTS_dv_left_, dTS_du_right_, dTS_dv_right_;
   cv::Mat cv_dTS_du_left_, cv_dTS_dv_left_, cv_dTS_du_right_, cv_dTS_dv_right_;
