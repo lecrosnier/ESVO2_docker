@@ -125,6 +125,52 @@ rig needs it because 10 ms of events is sparse across 1280×720; MVSEC's
 `TS_QUEUE_SIZE: 2` made no difference there either (0.110), as expected:
 MVSEC's frames are small, so mapping never falls behind the stream.
 
+### A7. VECtor `desk-normal`: a different sensor, the same failure mode
+
+A harder test than more MVSEC flights: VECtor uses two Prophesee event
+cameras at 640×480 (closer to the EVK4 than MVSEC's 346×260 DAVIS), a
+different scene and a different IMU. Its bags publish
+`prophesee_event_msgs/EventArray`, whose layout is identical to
+`dvs_msgs/EventArray` (same md5), so `/root/datasets/vector/retype.py`
+rewrites them raw under the topic names the launch expects. No repacking is
+needed — VECtor already publishes ~3,900 small event messages per second.
+
+Scored over the published trajectory's window (89.1 s), ATE SE3 / Sim3:
+
+| Run | ATE | Path ratio |
+|---|---|---|
+| Paper's published trajectory (its config has `USE_IMU: True`) | 0.165 / 0.146 | 0.89 |
+| **Ours, vision-only, 0.5× replay** | **0.118 / 0.110** | **0.94** |
+| Ours, vision-only, 1× | 1.316 / 0.313 | 1.65 |
+| Ours, 1×, with the EVK4 settings (queue, float, threads, SGM) | 1.405 / 0.303 | 1.59 |
+| Ours, 1×, lighter mapping (`BM_step: 3`, regularization off) | 0.240 / 0.220 | 0.80 |
+| Upstream IMU mode (`USE_IMU: True`) | mapping segfaults ~2 s in | — |
+
+Three things follow.
+
+**The algorithm and this fork's changes are sound.** Given enough compute
+(0.5×), vision-only beats the paper's own published trajectory on its own
+data, without tuning anything.
+
+**At 1× the failure is the rig's failure exactly.** The first 68 s track as
+well as the paper (ATE 0.154 against 0.131); the last 21 s blow up
+(1.116 against 0.078), and that is where the motion is fastest — mean gyro
+rate rises from ~0.10 rad/s at the start to 0.34 rad/s, peaks 0.75. Mapping
+publishes at **2.0 Hz at 1× against 5.5 Hz at 0.5×**, so the map the tracker
+registers against is stale, which is the same mechanism as B5/B6.
+
+**But the EVK4's fixes do not transfer, because the bottleneck is not the
+same.** `TS_QUEUE_SIZE` and the rest changed nothing here (1.405): VECtor's
+frames are small, so mapping never queues — its own cycle is simply slow,
+because the stock VECtor config is far heavier than the rig's (`BM_step: 1`
+against 3, regularization on, `mapping_rate_hz: 10`). Lightening it the way
+the rig's config was lightened fixes the divergence (late window 0.100
+against 1.116). The transferable finding is *map age*, not any particular
+parameter — and `aa_window_ms` (A6) is the same story in reverse.
+
+The gyro rotation lock, this fork's own feature, does not help here (1.495):
+the failure is not the rotation-for-translation ambiguity it was built for.
+
 ## Part B — The live rig, 1280×720 at real time
 
 All numbers below: `slide4_bias.bag`, gyro lock on, evaluated with
