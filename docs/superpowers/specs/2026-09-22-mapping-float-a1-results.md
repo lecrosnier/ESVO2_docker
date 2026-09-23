@@ -118,3 +118,29 @@ For the A2 decision: equivalence is met exactly (100.0000% match on 51 cycles / 
 - run2's back leg has a substantial dz component (-0.634 m) not seen in the other 4 runs; worth a closer look but a single outlier out of 5 runs.
 - 3 of 5 float back legs (run2 low; run3, run5 high) fall outside the double path's 0.564–0.673 m range, though the group difference is not statistically distinguishable at n=5 vs n=8 (see Verdict b). A larger sample would tighten this comparison.
 - No same-session double-path (`MAPPING_FLOAT: False`) comparison run was collected today; the comparison above relies on the double path's baseline measured on the same day with the same bag and configs (per the controller ruling), not a run collected in this exact session.
+
+## Addendum, 2026-09-23: `MAPPING_FLOAT` enabled
+
+The flip to `True` in `mapping_evk4_AA_mapping.yaml` was left pending above,
+because on 2026-09-22 the float path was indistinguishable from the double one
+and the speedup looked marginal against a 52 ms cycle.
+
+That comparison was made with the pipeline as it stood then: tracking at 25 Hz,
+mapping starved by a stale time surface queue, and initialisation spending ~2 s
+per SGM attempt. With those fixed (`7afb0de`, `2924ecb`, `3508840`, `3985fbc`),
+mapping is the stage that overruns at 1x, and the 1.30x on block matching is no
+longer marginal there. Measured on `slide4_bias` at 1x, `ts_rate` 50,
+`aa_window_ms` 40, two runs each:
+
+| `MAPPING_FLOAT` | out leg | back leg |
+|---|---|---|
+| False | +0.89, +0.85 m | -0.65, -0.72 m |
+| True  | +0.97, +0.99 m | -0.63, -0.75 m |
+
+and, with the lazy Eigen conversion of `3985fbc` on top, `True` gives
++1.02 / -0.96 m and +1.03 / -0.93 m.
+
+The user accepted the flip on this evidence. Ruling R1's criterion (b), the
+2026-09-22 double-path spread, is superseded by it: both paths have moved well
+past that spread. The spec's own band (a) is met for the out leg at 1x and at
+0.5x, and the back leg now reaches 0.93-1.08 m of a ~1.17 m true leg.

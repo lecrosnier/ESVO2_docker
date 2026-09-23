@@ -58,9 +58,13 @@ PROCESS_EVENT_NUM: 4000 #20000
 PROCESS_EVENT_NUM_AA: 4000 #20000
 # Static block matching and the static depth solve read float copies of the
 # time surfaces and allocate nothing per event (GPU programme step A1, see
-# docs/superpowers/specs/2026-09-22-mapping-float-a1-design.md). Off until A1's
-# validation passes; the temporal path always stays double.
-MAPPING_FLOAT: False
+# docs/superpowers/specs/2026-09-22-mapping-float-a1-design.md). The float path
+# is bit-identical to the double one on the 51 captured cycles. Offline its
+# speedup looked marginal (BM 1.30x, ~3.6 ms of a 52 ms cycle), but under
+# real-time load mapping is the stage that overruns, and there it matters: at
+# 1x the outward leg of the slide recovers 0.97-0.99 m with it on against
+# 0.85-0.89 m with it off.
+MAPPING_FLOAT: True
 x_patches: 8 
 y_patches: 6 
 select_points_from_AA: True
