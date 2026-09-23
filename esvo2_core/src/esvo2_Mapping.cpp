@@ -61,7 +61,7 @@ namespace esvo2_core
             tools::param(pnh_, "RegularizationMinCloseNeighbours", 8))),
         dpSolver_(camSysPtr_, dpConfigPtr_, NUMERICAL, tools::param(pnh_, "NUM_THREAD_MAPPING", NUM_THREAD_MAPPING), true),
         dFusor_(camSysPtr_, dpConfigPtr_),
-        dRegularizor_(dpConfigPtr_),
+        dRegularizor_(dpConfigPtr_, tools::param(pnh_, "NUM_THREAD_MAPPING", NUM_THREAD_MAPPING)),
         dpConfigPtr_ln_(new DepthProblemConfig(
             tools::param(pnh_, "patch_size_X", 25),
             tools::param(pnh_, "patch_size_Y", 25),
@@ -74,7 +74,7 @@ namespace esvo2_core
             tools::param(pnh_, "RegularizationMinCloseNeighbours", 8))),
         dpSolver_ln_(camSysPtr_, dpConfigPtr_ln_, NUMERICAL, tools::param(pnh_, "NUM_THREAD_MAPPING", NUM_THREAD_MAPPING), false),
         dFusor_ln_(camSysPtr_, dpConfigPtr_ln_),
-        dRegularizor_ln_(dpConfigPtr_ln_),
+        dRegularizor_ln_(dpConfigPtr_ln_, tools::param(pnh_, "NUM_THREAD_MAPPING", NUM_THREAD_MAPPING)),
         ebm_(camSysPtr_, tools::param(pnh_, "NUM_THREAD_MAPPING", NUM_THREAD_MAPPING), tools::param(pnh_, "SmoothTimeSurface", false)),
         pc_near_(new PointCloud()),
         pc_global_(new PointCloud()),

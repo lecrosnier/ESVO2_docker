@@ -5,6 +5,7 @@
 #include <memory>
 #include <list>
 #include <vector>
+#include <algorithm>
 #include <set>
 
 namespace esvo2_core
@@ -369,18 +370,23 @@ void
 SmartGrid<T>::getNeighbourhood(
   size_t row, size_t col, size_t radius, std::vector<T *> &neighbours)
 {
+  // Clamp once and walk each row through its own pointer: the straightforward
+  // version bounds-checked every cell and chased _grid[r] three times per cell
+  // (exists, at, get). At radius 20 that is 1681 cells per point, and the depth
+  // regularizer does this for every point in the map.
   neighbours.reserve((2 * radius + 1) * (2 * radius + 1));
-  for (int r = row - radius; r <= row + radius; r++)
+  const int rBegin = std::max(0, (int) row - (int) radius);
+  const int rEnd = std::min((int) rows() - 1, (int) (row + radius));
+  const int cBegin = std::max(0, (int) col - (int) radius);
+  const int cEnd = std::min((int) cols() - 1, (int) (col + radius));
+  for (int r = rBegin; r <= rEnd; r++)
   {
-    for (int c = col - radius; c <= col + radius; c++)
+    std::vector<T *> &gridRow = *_grid[r];
+    for (int c = cBegin; c <= cEnd; c++)
     {
-      //check whether this location is inside the image
-      if (r >= 0 && r < (int) rows() &&
-          c >= 0 && c < (int) cols())
-      {
-        if (exists(r, c) && at(r, c).valid())
-          neighbours.push_back(&get(r, c));
-      }
+      T *p = gridRow[c];
+      if (p != NULL && p->valid())
+        neighbours.push_back(p);
     }
   }
 }
