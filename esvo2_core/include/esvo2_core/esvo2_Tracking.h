@@ -163,6 +163,9 @@ namespace esvo2_core
     bool bUseImu_;
     // gyro rotation prediction (IMU_ROTATION_PREDICTION)
     bool bImuRotationPrediction_;
+    // USE_IMU mode: extrapolate the last registered displacement into the next
+    // frame's translation prior (upstream behaviour). Off by default, see the ctor.
+    bool bImuConstantVelocityPrior_;
     double imuTimeOffset_; // camera time = IMU time + imuTimeOffset_
     std::mutex gyro_mutex_;
     std::deque<tools::GyroSample> gyroBuf_;

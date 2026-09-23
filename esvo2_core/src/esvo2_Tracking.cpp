@@ -54,6 +54,14 @@ esvo2_Tracking::esvo2_Tracking(
   bVisualizeTrajectory_ = tools::param(pnh_, "VISUALIZE_TRAJECTORY", true);
   bUseImu_ = tools::param(pnh_, "USE_IMU", true);
   bImuRotationPrediction_ = tools::param(pnh_, "IMU_ROTATION_PREDICTION", false);
+  // With USE_IMU, upstream adds the moving average of the last five registered
+  // displacements to every frame's translation prior, unbounded. One bad
+  // registration step therefore becomes velocity, the next frame starts far
+  // off, lands wrong again, and the error compounds: tracking reached 1e5-1e11 m
+  // on MVSEC indoor_flying1 and VECtor desk-normal, and the mapping node crashed
+  // in every such run seen. Without the term both track normally (ATE 0.090 m
+  // and 0.20-0.24 m). Set true to restore the upstream behaviour.
+  bImuConstantVelocityPrior_ = tools::param(pnh_, "IMU_CONSTANT_VELOCITY_PRIOR", false);
   imuTimeOffset_ = tools::param(pnh_, "IMU_TIME_OFFSET", 0.0);
   // tools::param cannot print a vector, so GYRO_BIAS is read directly.
   std::vector<double> vGyroBias;
@@ -345,7 +353,9 @@ esvo2_Tracking::curDataTransferring()
         
         // If the predicted position change is significantly different from the previous displacement due to potentially unstable velocity estimates, 
         // use the previous displacement as the initial value for the next optimization.
-        if(initVsFlag && (imu_data_.t_v_last_mapping.second * imu_data_.sum_dt - last_t_).norm()/last_t_.norm() < 0.1)
+        if (!bImuConstantVelocityPrior_)
+          T_world_cur_.block(0, 3, 3, 1) += R_b_c_.transpose() * Imu_t;
+        else if(initVsFlag && (imu_data_.t_v_last_mapping.second * imu_data_.sum_dt - last_t_).norm()/last_t_.norm() < 0.1)
           T_world_cur_.block(0, 3, 3, 1) += R_b_c_.transpose() * Imu_t + (imu_data_.t_v_last_mapping.second * imu_data_.sum_dt); 
         else
           T_world_cur_.block(0, 3, 3, 1) += R_b_c_.transpose() * Imu_t + last_t_;
