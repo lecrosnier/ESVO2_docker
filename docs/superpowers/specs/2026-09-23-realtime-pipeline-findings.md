@@ -432,6 +432,20 @@ backward component. A cart pushed sideways on swivelling casters can crab, and
 each sideways leg is a separate track starting after the motion does, so that
 figure is not a clean measurement.
 
+**Cross-check on the pre-swap bags.** If the mount swap really changed the
+geometry, bags recorded before it should be *worse* with the new calibration,
+the mirror image of the hallway. They are:
+
+| Pre-swap bag | Old calibration | New calibration |
+|---|---|---|
+| `wall_tex_185`, wall at a measured 1.85 m (RANSAC plane) | 1.920 m (+3.8%, as originally measured) | 1.565 m (−15.4%) |
+| `slide4_bias`, ~1.17 m out and back, 2 runs each | +1.01 / +1.03 out, −0.98 / −0.96 back | +0.75 / +0.73 out, −0.63 / −0.61 back |
+
+So each calibration is right for the bags of its own era, and the change is
+physical rather than an artefact of either calibration session.
+`calib/evk4_stereo/` stays the one to use for anything recorded before
+2026-09-23; the launch files default to the new one.
+
 **What this says about the earlier "z-drift".** The drift along the optical
 axis chased since 2026-09-21 was measured on a correctly calibrated rig and is
 not explained by this. But every rig result from after the mount swap and
