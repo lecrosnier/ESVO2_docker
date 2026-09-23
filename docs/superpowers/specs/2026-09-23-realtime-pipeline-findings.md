@@ -95,6 +95,36 @@ angular velocity, it is within 3° of identity, which is what `calib/upenn`
 declares. This is upstream behaviour, unmodified by this fork, and it is why
 `USE_IMU: False` remains right for the rig.
 
+### A6. Checked on two sequences this fork had never run
+
+`indoor_flying2` and `indoor_flying3` were downloaded afterwards and run
+without tuning anything, vision-only, with the upenn configs as committed.
+ATE is SE3 / Sim3 in metres, over each sequence's published trajectory window.
+
+| Sequence | Paper | Ours, original packing | Ours, 5 ms packing |
+|---|---|---|---|
+| `indoor_flying1` | 0.076 / 0.076, ratio 0.99 | 0.42–0.66, ratio 0.74–0.79 | 0.079 / 0.077, ratio 0.98 |
+| `indoor_flying2` (unseen) | 0.100 / 0.066, ratio 0.96 | 0.874 / 0.873, ratio 0.65 | 0.126 / 0.067 and 0.107 / 0.063, ratio 0.94 |
+| `indoor_flying3` (unseen) | 0.073 / 0.049, ratio 0.95 | 0.520 / 0.456, ratio 0.72 | 0.074 / 0.046, 0.068 / 0.043, 0.070 / 0.046, ratio 0.96–0.97 |
+
+The packing result holds on data that had no part in finding it, and the
+code as committed — float time surface rendering, the narrowed SGM range,
+lazy conversion, the tracking changes — reproduces the paper on all three.
+
+One difference worth noting: the repacked runs reset tracking 98–239 times
+per run while the 30 Hz runs never reset. Resets are not, by themselves, a
+quality signal here — the runs with hundreds of them are the accurate ones,
+because at 100 Hz the tracker outruns a 20 Hz mapping thread, recovers, and
+still produces a far better trajectory than the slow, stable 30 Hz runs.
+
+**`aa_window_ms` does not transfer to MVSEC**, which is why its default is 0.
+On `indoor_flying3`, setting it to 40 removes the resets completely (125 → 0)
+and costs accuracy: ATE 0.114 and 0.120 against 0.068–0.074 without it. The
+rig needs it because 10 ms of events is sparse across 1280×720; MVSEC's
+346×260 DAVIS is dense enough that a longer window only stales the map.
+`TS_QUEUE_SIZE: 2` made no difference there either (0.110), as expected:
+MVSEC's frames are small, so mapping never falls behind the stream.
+
 ## Part B — The live rig, 1280×720 at real time
 
 All numbers below: `slide4_bias.bag`, gyro lock on, evaluated with
