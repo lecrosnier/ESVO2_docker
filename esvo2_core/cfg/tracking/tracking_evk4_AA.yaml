@@ -55,3 +55,6 @@ HOLD_MAP_GRACE_S: 1.0
 # events see no motion. With an active time surface it coasts for at most HOLD_COAST_S, then
 # falls back to upstream.
 HOLD_COAST_S: 0.5
+# Re-estimate the gyro bias from every GYRO_BIAS_WINDOW-long still window of a hold
+# (the bias drifts with temperature over a session). Only for an estimated bias.
+GYRO_BIAS_REFRESH: True

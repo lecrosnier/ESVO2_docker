@@ -1,4 +1,5 @@
 #include <esvo2_core/esvo2_Tracking.h>
+#include <cstring>
 #include <iomanip>
 #include <esvo2_core/tools/TicToc.h>
 #include <esvo2_core/tools/params_helper.h>
@@ -85,6 +86,7 @@ esvo2_Tracking::esvo2_Tracking(
       gyroBiasMaxStd_ = 0.0035;
     }
     gyroBiasEstimator_.reset(new tools::GyroBiasEstimator(gyroBiasWindow_, gyroBiasMaxStd_));
+    bGyroBiasRefresh_ = tools::param(pnh_, "GYRO_BIAS_REFRESH", false);
   }
   bImuRotationLock_ = tools::param(pnh_, "IMU_ROTATION_LOCK", false);
   if (bImuRotationLock_ && (!bImuRotationPrediction_ || bUseImu_))
@@ -122,7 +124,8 @@ esvo2_Tracking::esvo2_Tracking(
   }
   if (bStillnessHold_)
     LOG(INFO) << "Stillness hold enabled: STILL_MIN_INFO " << stillMinInfo_ << ", STILL_MIN_SUPPORT "
-              << stillMinSupport_ << ", HOLD_MAX_S " << holdMaxS_;
+              << stillMinSupport_ << ", HOLD_MAX_S " << holdMaxS_
+              << ", GYRO_BIAS_REFRESH " << bGyroBiasRefresh_;
   resultPath_             = tools::param(pnh_, "PATH_TO_SAVE_TRAJECTORY", std::string());
   nh_.setParam("/ESVO2_SYSTEM_STATUS", ESVO2_System_Status_);
 
@@ -404,6 +407,8 @@ void esvo2_Tracking::TrackingLoop()
         holdEndT_ = tCur;
       }
     }
+
+    bHoldFrame_ = std::strcmp(action, "HOLD") == 0;
 
     if(motionLog_.is_open())
     {
@@ -997,6 +1002,34 @@ void esvo2_Tracking::imuPredictionCallback(const sensor_msgs::ImuConstPtr &msg)
     bGyroBiasKnown_ = true;
     LOG(INFO) << "Gyro bias estimated from " << gyroBiasEstimator_->window() << " s still window: "
               << gyroBias_.transpose() << " rad/s (std " << gyroBiasEstimator_->biasStd().transpose() << ")";
+  }
+  // Refresh the bias from the still windows of each hold (GYRO_BIAS_REFRESH).
+  if (bGyroBiasRefresh_ && bGyroBiasKnown_)
+  {
+    if (!bHoldFrame_)
+    {
+      if (bGyroBiasRefreshFed_)
+      {
+        gyroBiasRefresh_.reset();
+        bGyroBiasRefreshFed_ = false;
+      }
+    }
+    else
+    {
+      if (!gyroBiasRefresh_)
+        gyroBiasRefresh_.reset(new tools::GyroBiasEstimator(gyroBiasWindow_, gyroBiasMaxStd_));
+      bGyroBiasRefreshFed_ = true;
+      if (gyroBiasRefresh_->add(gyroBuf_.back()))
+      {
+        const Eigen::Vector3d b = gyroBiasRefresh_->bias();
+        LOG(INFO) << "Gyro bias refreshed during a hold: " << b.transpose() << " rad/s (change "
+                  << (b - gyroBias_).norm() << " rad/s)";
+        gyroBias_ = b;
+        nGyroBiasRefresh_++;
+        gyroBiasRefresh_.reset(); // the next window starts afresh
+        bGyroBiasRefreshFed_ = false;
+      }
+    }
   }
   while (!gyroBuf_.empty() && gyroBuf_.front().t < t - 2.0)
     gyroBuf_.pop_front();

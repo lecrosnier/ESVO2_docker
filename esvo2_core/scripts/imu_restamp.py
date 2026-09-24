@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""/sbg/imu_data (IMU clock) -> /imu/data_synced (even 5 ms stamps on ROS time)."""
+"""/sbg/imu_data (IMU clock) -> /imu/data_synced (IMU-clock stamps mapped onto ROS time, see imu_restamp_core)."""
 import rospy
 from sensor_msgs.msg import Imu
 from sbg_driver.msg import SbgImuData

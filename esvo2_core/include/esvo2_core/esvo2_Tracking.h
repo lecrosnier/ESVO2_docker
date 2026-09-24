@@ -25,6 +25,7 @@
 #include <opencv2/calib3d/calib3d.hpp>
 #include <cv_bridge/cv_bridge.h>
 
+#include <atomic>
 #include <map>
 #include <deque>
 #include <mutex>
@@ -182,6 +183,14 @@ namespace esvo2_core
     std::unique_ptr<tools::GyroBiasEstimator> gyroBiasEstimator_; // null when GYRO_BIAS is configured
     double gyroBiasWindow_ = 2.0, gyroBiasMaxStd_ = 0.0035;       // validated GYRO_BIAS_WINDOW/GYRO_STILL_MAX_STD, kept to re-create gyroBiasEstimator_ on a backward time jump
     bool bGyroBiasKnown_ = false;                          // guarded by gyro_mutex_
+    // GYRO_BIAS_REFRESH: re-estimate the bias from every still window of a hold
+    // (the bias drifts with temperature over a session). Only for an estimated
+    // bias, never a configured GYRO_BIAS.
+    bool bGyroBiasRefresh_ = false;
+    std::atomic<bool> bHoldFrame_{false};                  // last frame's decision was HOLD
+    std::unique_ptr<tools::GyroBiasEstimator> gyroBiasRefresh_; // guarded by gyro_mutex_
+    bool bGyroBiasRefreshFed_ = false;                     // guarded by gyro_mutex_
+    size_t nGyroBiasRefresh_ = 0;
     Eigen::Vector3d gyroBias_ = Eigen::Vector3d::Zero();   // IMU frame, rad/s; guarded by gyro_mutex_
     // IMU_ROTATION_LOCK: translation-only solve on frames with a bias-corrected gyro prediction
     bool bImuRotationLock_ = false;
