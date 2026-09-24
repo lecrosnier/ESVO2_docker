@@ -119,10 +119,14 @@ runaway pose drift when IMU fusion was enabled, see "Known limitations").
 
 ### `prophesee_ros_wrapper` (sibling package, own git repo)
 
-These changes are stored in this repo as
-`evk4_drivers/prophesee_ros_wrapper.patch`, made against upstream commit
-`59f2aca`. To apply them to a fresh clone, run
-`git checkout 59f2aca && git apply /path/to/ESVO2/evk4_drivers/prophesee_ros_wrapper.patch`.
+These changes live in the driver's own fork,
+https://github.com/lecrosnier/prophesee_ros_wrapper, branch
+`evk4-noise-filters` (commit `06282ac` or later), on top of upstream
+`59f2aca`. Clone that branch into the catkin workspace:
+`git clone -b evk4-noise-filters https://github.com/lecrosnier/prophesee_ros_wrapper.git`.
+(This repo used to carry a copy as `evk4_drivers/prophesee_ros_wrapper.patch`;
+it fell behind the fork — no bias parameters, a missing hot pixel, the serials
+from before the side swap — and was removed on 2026-09-24.)
 
 - **New:** `prophesee_ros_driver/src/prophesee_ros_stereo_publisher.cpp`
   (+ matching header): a node that opens **both** cameras of the synced
@@ -324,12 +328,19 @@ the same paths in the `sbg_ros_driver` clone.
   accelerometer). New `tracking_evk4_AA.yaml` keys: `STILLNESS_HOLD` (on in
   the EVK4 cfg, off by default), `STILL_WINDOW`, `ACC_STILL_MAX_STD`,
   `STILL_MIN_INFO`, `STILL_MIN_SUPPORT`, `HOLD_MAX_S`, `HOLD_MAP_GRACE_S`,
-  `HOLD_COAST_S`; `GYRO_STILL_MAX_STD` is shared. Launch args
+  `HOLD_COAST_S`, `GYRO_BIAS_REFRESH` (re-estimate the gyro bias during
+  holds); `GYRO_STILL_MAX_STD` is shared. Launch args
   `stillness_hold:=true|false` and `motion_log:=file.csv` (per-frame
   decision log, see `scripts/diagnostics/motion_log_summary.py`). With the
   IMU unplugged, silent or frozen, the tracker behaves as before. Rules and
   measurements: part B3 of
   `docs/superpowers/specs/2026-09-23-realtime-pipeline-findings.md`.
+- **2026-09-24 review:** `evk4_live_all.launch` now runs the validated
+  settings (time surfaces at 50 Hz with a 40 ms AA window, biases
+  `{bias_diff_on: 20, bias_diff_off: 20}`, 8 Mev/s cap); before, it ran 25 Hz
+  and sensor defaults, which no result was measured with. Regression gate:
+  `esvo2_core/scripts/regress/regress.sh OUT_DIR` (~12 min, needs the hallway
+  and MVSEC bags). Details in part B4 of the findings doc.
 - **New:** replay/evaluation tooling for regression-testing tracking
   against recorded bags instead of the live rig:
   `esvo2_core/scripts/replay_eval.sh` (plays a bag through a launch file,

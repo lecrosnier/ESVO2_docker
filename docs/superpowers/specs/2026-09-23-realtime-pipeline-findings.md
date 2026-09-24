@@ -565,6 +565,34 @@ and 2.04/1.77/2.92/2.76 vs 2.03/1.78/2.93/2.75; `hallway4_lateral`
 rotation, so they cannot validate it either: that needs a capture with real
 rotation (`calibrate_imu_camera_rotation.py`, ~60 s turning the rig by hand).
 
+## Part B4 — Review of the whole fork (2026-09-24, branch `review-fixes`)
+
+A review of everything upstream `main` does not have (87 commits) found the
+problems below. Each fix was checked against a new replay regression gate
+(`esvo2_core/scripts/regress/regress.sh`, Part D), run on the code before and
+after.
+
+| Problem | Fix |
+|---|---|
+| `evk4_live_all.launch` ran time surfaces at 25 Hz without the AA window, with default sensor biases and a 4 Mev/s cap: none of it the configuration any result was measured with (B1: 25 Hz loses 15–30% of the translation) | `system_evk4_mapping.launch` defaults to `ts_rate` 50 and `aa_window_ms` 40; `evk4_live_all.launch` sets biases `{bias_diff_on: 20, bias_diff_off: 20}` and an 8 Mev/s cap, the hallway recording settings |
+| `evk4_drivers/prophesee_ros_wrapper.patch` had fallen behind the driver's own fork (no bias parameters, a missing hot pixel, pre-swap serials) | Removed; the docs point to `lecrosnier/prophesee_ros_wrapper`, branch `evk4-noise-filters` |
+| Mapping's detached publishing threads (one per cycle) rebuilt the shared clouds, including the tracker's `pc_color_`, with no lock, and read `dqvDepthPoints_` and the status string while the mapping thread changed them. Inherited from upstream; the fork's ~20 Hz mapping made overlaps likelier | The publish decision is taken on the mapping thread and passed in; the clouds are rebuilt under `publish_mutex_`, which `reset()` also takes |
+| With `USE_IMU` set but no IMU data, mapping segfaulted: the initial orientation came from 0/0 samples and the back end dereferenced pre-integrations that were never created. The stock `system_upenn.launch` does exactly this (it never remaps the IMU) | The first IMU pose waits for samples; the back end is skipped until the whole window has IMU data. The stock launch now runs the whole of `indoor_flying1` (6,493 poses) |
+| The time-surface node, on a backward time jump (a looped bag, a clock step), insertion-sorted every new event past up to 5 M buffered ones and read its new look-up table at negative indices. The event bounds check also let x = width through | Jumps over 1 s drop the buffer and reset the per-pixel times and AA window; ages are clamped; bounds are `>=`. A looped 6 s slice of `hallway3`: a warning per jump, no deaths |
+| The gyro bias was estimated once, at startup | `GYRO_BIAS_REFRESH` (on for the EVK4) re-estimates it from each 2 s still window of a hold: 21–34 refreshes per hallway bag, changes of ~10^-4 rad/s |
+
+**Regression gate, same day, before → after:**
+
+| Case | Before | After |
+|---|---|---|
+| `hallway2` legs / truth, closure | 1.01 / 0.89 / 0.99 / 0.91, 0.41 m | 0.98 / 0.87 / 0.97 / 0.93, 0.43 m |
+| `hallway3` far points, end | 2.05 / 1.92 m, 0.02 m | 1.95 / 2.03 m, 0.13 m |
+| `hallway4_lateral` legs, closure | 0.91 / 0.86 m, 0.05 m | 0.96 / 0.87 m, 0.09 m |
+| MVSEC `indoor_flying1` ATE (vision only), 2 runs each | 0.085 / 0.088 m | 0.092 / 0.086 m |
+
+All within run-to-run spread; 0 tracking resets throughout. All 45 C++ and 13
+Python unit tests pass.
+
 ## Part C — Dead ends, in the order they were tried
 
 Recorded because each one cost time and none of them is obviously wrong in
@@ -630,6 +658,18 @@ advance.
 20. **`STILL_MIN_INFO: 1.0e5` in YAML.** PyYAML, and rosparam, read it as a
     string (YAML 1.1 needs `1.0e+5`). Written as `100000.0`.
 
+21. **A per-frame speed gate** (`MAX_SPEED` 2 m/s, B4). Meant to catch
+    registration jumps, it rejected 89–242 frames per hallway bag, median
+    2.8 m/s: 5.6 cm in one 20 ms frame is ordinary frame-to-frame
+    registration noise here. Holding the pose on those frames trimmed real
+    progress (`hallway4` leg 2: 0.86 → 0.785 m). Removed; the hysteresis (B3)
+    already stops the jumps it was meant for.
+22. **Rejecting gyro intervals with an internal gap.** Two existing tests
+    specify, on purpose, that sparse samples are integrated with a
+    zero-order hold and only the interval's ends need coverage. The rig's IMU
+    runs at 200 Hz, so the gap case is minor; reverted rather than rewrite
+    the tested contract.
+
 Two tooling traps also cost time: `rostopic hz` reports nothing useful under
 `use_sim_time` (use a subscriber node — `scripts/diagnostics/ratemon.py`), and
 `pkill -f <script>` matches the shell running it.
@@ -649,6 +689,11 @@ Two tooling traps also cost time: `rostopic hz` reports nothing useful under
   tracking frame's hold inputs and decision, and a timeline of them (B3).
 - `scripts/diagnostics/imu_cut_relay.py` — replays with the IMU dying at a
   chosen stamp.
+- `scripts/regress/regress.sh OUT_DIR [case...]` — the regression gate: replays
+  `hallway2`, `hallway3`, `hallway4_lateral` and MVSEC `indoor_flying1`
+  (vision only) through the committed launch files and checks legs, closure,
+  resets and ATE against fixed bounds (`regress_check.py`). ~12 min at 1×;
+  exit status 0 only if every check passes. Run it before merging.
 
 Replay at 0.5× and 1× and compare: if a change helps at 0.5× but not 1×, it is
 a compute or latency problem; if it fails at both, it is the algorithm or the
