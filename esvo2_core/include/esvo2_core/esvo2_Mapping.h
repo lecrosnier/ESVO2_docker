@@ -86,7 +86,12 @@ namespace esvo2_core
         DepthMap::Ptr depthMapPtr,
         Transformation tr,
         ros::Time t,
-        cv::Mat TS_left_image);
+        cv::Mat TS_left_image,
+        bool publishCloud);
+    // Whether this cycle's map goes to the tracker. Decided on the mapping
+    // thread: it reads dqvDepthPoints_ and the system status, which the
+    // detached publishing thread must not touch.
+    bool shouldPublishPointCloud();
     void publishPointCloud(
         DepthMap::Ptr &depthMapPtr,
         Transformation &tr,
@@ -279,6 +284,10 @@ namespace esvo2_core
     bool initFirstPoseFlag;
     Eigen::Vector3d acc_0, gyr_0;
     std::mutex mBuf;
+
+    // Serialises the detached publishing threads (one per mapping cycle) and
+    // reset() on the shared clouds pc_color_, pc_filtered_, pc_near_, pc_global_.
+    std::mutex publish_mutex_;
 
     // Golden capture: empty dir = off.
     std::string golden_capture_dir_;

@@ -59,6 +59,15 @@ namespace esvo2_core
       if (bUSE_IMU_ && frame_count < WINDOW_SIZE)
         return;
 
+      // With USE_IMU but no IMU data (topic not remapped, IMU unplugged), no
+      // pre-integration is ever created and the solve below dereferences NULL
+      // (a segfault on MVSEC with the stock system_upenn.launch). Skip the IMU
+      // back end until the whole window has IMU data.
+      if (bUSE_IMU_)
+        for (int i = 0; i <= WINDOW_SIZE; i++)
+          if (!pre_integrations[i])
+            return;
+
       // get parameters
       double para_Pose[WINDOW_SIZE + 1][7];
       double para_SpeedBias[WINDOW_SIZE + 1][9];

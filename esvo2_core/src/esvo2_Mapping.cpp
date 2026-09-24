@@ -535,7 +535,7 @@ namespace esvo2_core
 
     std::thread tPublishMappingResult(&esvo2_Mapping::publishMappingResults, this,
                                       depthFramePtr_->dMap_, depthFramePtr_->T_world_frame_, t,
-                                      TS_obs_ptr_->second.cvImagePtr_left_->image);
+                                      TS_obs_ptr_->second.cvImagePtr_left_->image, shouldPublishPointCloud());
     tPublishMappingResult.detach();
 #ifdef ESVO2_CORE_MAPPING_LOG
     LOG(INFO) << "\n";
@@ -690,7 +690,7 @@ namespace esvo2_core
     // publish the invDepth map
     std::thread tPublishMappingResult(&esvo2_Mapping::publishMappingResults, this,
                                       depthFramePtr_->dMap_, depthFramePtr_->T_world_frame_, t,
-                                      TS_obs_ptr_->second.cvImagePtr_left_->image);
+                                      TS_obs_ptr_->second.cvImagePtr_left_->image, shouldPublishPointCloud());
     tPublishMappingResult.detach();
     return true;
   }
@@ -775,7 +775,9 @@ namespace esvo2_core
     // get the IMU data by time interval
     getIMUInterval(prevTime, curTime, accVector, gyrVector);
     mBuf.unlock();
-    if (!initFirstPoseFlag)
+    // Needs at least one sample: an empty interval (no IMU yet) made the average
+    // acceleration 0/0 and the initial orientation NaN.
+    if (!initFirstPoseFlag && !accVector.empty())
       initFirstIMUPose(accVector);
     for (int i = 0; i < accVector.size(); i++)
     {
@@ -1171,10 +1173,13 @@ namespace esvo2_core
     TS_obs_ptr_ = &emptyObs_; // about to point into the cleared history
     TS_history_.clear();
     tf_->clear();
-    pc_color_->clear();
-    pc_filtered_->clear();
-    pc_near_->clear();
-    pc_global_->clear();
+    {
+      std::lock_guard<std::mutex> lock(publish_mutex_);
+      pc_color_->clear();
+      pc_filtered_->clear();
+      pc_near_->clear();
+      pc_global_->clear();
+    }
     TS_id_ = 0;
     depthFramePtr_->clear();
     dqvDepthPoints_.clear();
@@ -1204,12 +1209,35 @@ namespace esvo2_core
   {
   }
 
+  bool esvo2_Mapping::shouldPublishPointCloud()
+  {
+    if (ESVO2_System_Status_ == "INITIALIZATION")
+      return true;
+    if (ESVO2_System_Status_ != "WORKING")
+      return false;
+    if (FusionStrategy_ == "CONST_FRAMES")
+      return dqvDepthPoints_.size() == maxNumFusionFrames_;
+    if (FusionStrategy_ == "CONST_POINTS")
+    {
+      size_t numFusionPoints = 0;
+      for (size_t n = 0; n < dqvDepthPoints_.size(); n++)
+        numFusionPoints += dqvDepthPoints_[n].size();
+      return numFusionPoints > 0.5 * maxNumFusionPoints_;
+    }
+    return false;
+  }
+
   void esvo2_Mapping::publishMappingResults(
       DepthMap::Ptr depthMapPtr,
       Transformation tr,
       ros::Time t,
-      cv::Mat TS_left_image)
+      cv::Mat TS_left_image,
+      bool publishCloud)
   {
+    // Runs on a detached thread, one per mapping cycle: two of them, or one and
+    // reset(), would otherwise rebuild the shared clouds at the same time,
+    // including pc_color_, the map the tracker registers against.
+    std::lock_guard<std::mutex> lock(publish_mutex_);
     cv::Mat invDepthImage, stdVarImage, ageImage, costImage, eventImage, confidenceMap, invDepthImage_rel;
 
     // TS_left_image is a snapshot taken on the calling (mapping) thread at
@@ -1228,24 +1256,8 @@ namespace esvo2_core
       publishImage(invDepthImage, t, invDepthMap_pub_);
     }
 
-    if (ESVO2_System_Status_ == "INITIALIZATION")
+    if (publishCloud)
       publishPointCloud(depthMapPtr, tr, t);
-    if (ESVO2_System_Status_ == "WORKING")
-    {
-      if (FusionStrategy_ == "CONST_FRAMES")
-      {
-        if (dqvDepthPoints_.size() == maxNumFusionFrames_)
-          publishPointCloud(depthMapPtr, tr, t);
-      }
-      if (FusionStrategy_ == "CONST_POINTS")
-      {
-        size_t numFusionPoints = 0;
-        for (size_t n = 0; n < dqvDepthPoints_.size(); n++)
-          numFusionPoints += dqvDepthPoints_[n].size();
-        if (numFusionPoints > 0.5 * maxNumFusionPoints_)
-          publishPointCloud(depthMapPtr, tr, t);
-      }
-    }
   }
 
   void esvo2_Mapping::publishPointCloud(
