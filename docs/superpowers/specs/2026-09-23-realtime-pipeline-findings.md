@@ -509,19 +509,27 @@ default).** Events decide first; the IMU is asked only when they cannot.
   map or the end of a hold, the tracker keeps its last map with ≥ `BATCH_SIZE`
   points instead of swapping in a near-empty one. It now owns that cloud
   (`refCloud_`), so the points outlive `refPCMap_`'s eviction.
+- *Hysteresis*: once holding or coasting, the tracker resumes only on a
+  structured time surface (`support` ≥ `STILL_MIN_SUPPORT`) as well as J^T J ≥
+  `STILL_MIN_INFO`. Without it, isolated frames of a still camera cross the
+  J^T J threshold by chance and are published: jumps of up to 0.5 m while the
+  cart was handled at the end of `hallway4_lateral`. While tracking, a quiet
+  surface alone does not stop it (7–10% of moving frames have one and register
+  well).
 - A hold always publishes a pose: mapping resets itself when poses stop for
   0.5 s (`stampedPoseCallback`), so "hold" must never mean "stay silent".
 - `HOLD_MAX_S` (120 s) ends any hold or coast. `MOTION_LOG:=file.csv` (launch
   arg `motion_log`) writes every frame's inputs and decision; `stillness_hold`
   overrides the config from the launch line.
 
-**Results** (1× replay, new calibration unless noted):
+**Results** (1× replay, new calibration with the corrected `T_b_c` below; the
+`slide4_bias` runs predate the hysteresis, which only changes how holds end):
 
 | Bag | Hold off | Hold on |
 |---|---|---|
-| `hallway2`, legs 2 / 2 / 3 / 3 m | 3,504 resets; each leg from zero | **1.94 / 1.86 / 2.93 / 2.86 m**, closure 0.27 m over 10 m, 0 resets |
-| `hallway3`, far points 2.00 m | 1.97 / 1.90 m, closure 0.11 m, 2,041 resets | 2.05 / 2.01 m, closure 0.16 m, 0 resets |
-| `hallway4_lateral`, 1.00 m out and back | −0.48 / +1.29 m, closure 0.83 m, 3,498 resets | **−0.89 / +0.87 m**, closure 0.12 m, 0 resets |
+| `hallway2`, legs 2 / 2 / 3 / 3 m, 2 runs | 3,504 resets; each leg from zero | **1.99–2.04 / 1.77–1.79 / 2.89–2.92 / 2.74–2.76 m**, closure 0.41–0.43 m over 10 m, 0 resets |
+| `hallway3`, far points 2.00 m | 1.97 / 1.90 m, closure 0.11 m, 2,041 resets | 1.95 / 1.89 m, closure 0.12 m, 0 resets, one track |
+| `hallway4_lateral`, 1.00 m out and back | −0.48 / +1.29 m, closure 0.83 m, 3,498 resets | **−0.88 / +0.86 m**, closure 0.08 m, 0 resets |
 | `slide4_bias` (old calib), 3 runs each | out 1.04 / 1.01 / 1.04, back 0.96 / 1.04 / 0.94 | out 1.01 / 0.96 / 1.02, back 0.88 / 0.92 / 0.89 |
 | `hallway2`, IMU cut 55 s in | — | holds until the cut; after it one warning, then upstream behaviour (resets at stops), tracking and mapping keep publishing |
 
@@ -533,15 +541,29 @@ that drift lengthened the measured return leg. During the motion itself both
 modes measure the same leg (43 → 52 s: 0.895 m off, 0.884 m on).
 
 **Residuals.**
-- One 10 cm jump on `hallway3`, while decelerating into the last stop: the IMU
-  still said "moving", J^T J was just above threshold (1.25×10^5) on a quiet
-  time surface. Vetoing quiet frames while moving is not the fix: 7–10% of
-  genuinely moving frames have a quiet surface, in runs up to 0.7 s, and
-  register well (median 4×10^5). A speed gate against the IMU would be.
+- Isolated frames crossing J^T J = 10^5 on a quiet time surface while
+  coasting (a 10 cm jump on `hallway3`, up to 0.5 m on `hallway4_lateral`).
+  Fixed by the hysteresis above. Vetoing every quiet frame would not have
+  been: 7–10% of genuinely moving frames have a quiet surface, in runs up to
+  0.7 s, and register well (median 4×10^5).
 - The forward legs are still 2–7% short (B2); the hold only stopped resets from
   hiding it.
-- `T_b_c` (see Part E): the new stereo calibration rotated the *rectified*
-  left frame by 3.5° (mostly about y), and `T_b_c` refers to that frame.
+- The hallway legs back towards the start are 7–11% short, the forward ones
+  0–4% (B2).
+
+**`T_b_c` corrected for the new rectification.** The IMU was not touched, but
+the new stereo calibration rotated the *rectified* left frame by 3.5° (mostly
+about y), and `T_b_c` refers to that frame. Assuming the left camera did not
+move against the IMU, R_b_c,new = R_b_c,old · R1,old · R1,newᵀ (R1 = each
+`left.yaml`'s `rectification_matrix`, raw → rectified). Supporting evidence:
+the corrected rotation is 1.1° from a square axis permutation, against 4.1°
+before, as expected for housings mounted square to each other. It makes no
+measurable difference on the hallway bags (same code, corrected vs old, legs
+within run-to-run noise: `hallway2` 1.99/1.79/2.89/2.74 vs 1.99/1.79/2.72/2.71
+and 2.04/1.77/2.92/2.76 vs 2.03/1.78/2.93/2.75; `hallway4_lateral`
+−0.88/+0.86 vs −0.89/+0.90). Those are straight cart runs with little
+rotation, so they cannot validate it either: that needs a capture with real
+rotation (`calibrate_imu_camera_rotation.py`, ~60 s turning the rig by hand).
 
 ## Part C — Dead ends, in the order they were tried
 
@@ -598,11 +620,14 @@ advance.
 17. **Trusting a "moving" IMU at the start of a leg.** The accelerometer crosses
     its threshold ~0.2 s before the scene shows anything; publishing those
     registrations (J^T J 10^2–10^4) jumped 0.2–0.6 m. Hence coasting.
-18. **A fixed cap on coasting.** With the cart being handled at the end of
+18. **Resuming on J^T J alone.** Once holding or coasting on a quiet time
+    surface, single frames still crossed the threshold by chance, and each
+    one jumped the pose. Resuming now also needs a structured time surface.
+19. **A fixed cap on coasting.** With the cart being handled at the end of
     `hallway2`, the cap expired on a still-empty time surface and an
     uninformed registration (J^T J 553) jumped 0.9 m. A quiet time surface now
     means "no motion" whatever the IMU says.
-19. **`STILL_MIN_INFO: 1.0e5` in YAML.** PyYAML, and rosparam, read it as a
+20. **`STILL_MIN_INFO: 1.0e5` in YAML.** PyYAML, and rosparam, read it as a
     string (YAML 1.1 needs `1.0e+5`). Written as `100000.0`.
 
 Two tooling traps also cost time: `rostopic hz` reports nothing useful under
@@ -632,13 +657,9 @@ single run misled this investigation more than once.
 
 ## Part E — Open
 
-- **The remaining forward under-estimate (B2, B3)**, 2–7% per leg on `hallway2`.
-- **`T_b_c` after the mount swap (B2).** The IMU was not touched, but the new
-  stereo calibration rotated the rectified left frame, which `T_b_c` refers to,
-  by 3.5°. If the left camera itself did not move, the correction needs no rig:
-  R_b_c,new = R_b_c,old · R1,old · R1,newᵀ (the `rectification_matrix` of each
-  `left.yaml`). Otherwise recalibrate with `calibrate_imu_camera_rotation.py`.
-- **A speed gate** against the IMU for the rare registration that jumps (B3).
+- **The remaining under-estimate (B2, B3)**: on `hallway2`, 0–4% on the legs out, 7–11% on the legs back.
+- **`T_b_c` after the mount swap (B3).** Corrected on paper for the new
+  rectification; not yet validated on a capture with real rotation.
 - **Z-drift** (on the pre-swap rig). Closure along the optical axis was −0.41 to −0.79 m at 1× and
   −0.29 m at 0.5×, against a few cm in x. Map age drives it (C14), and the flat
   wall makes z the softest direction to absorb error. Untested: whether a scene
