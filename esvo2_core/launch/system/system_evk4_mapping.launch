@@ -13,8 +13,12 @@
   <param name="/use_sim_time" value="$(arg use_sim_time)"/>
   <arg name="mapping_cfg" default="$(find esvo2_core)/cfg/mapping/mapping_evk4_AA_mapping.yaml"/>
   <arg name="tracking_cfg" default="$(find esvo2_core)/cfg/tracking/tracking_evk4_AA.yaml"/>
-  <arg name="ts_rate" default="25"/>
-  <arg name="aa_window_ms" default="0"/>
+  <!-- Time-surface (= tracking) rate and AA window: the settings every rig
+       result since 2026-09-22 was measured with. 25 Hz loses 15-30% of the
+       translation, and without the window the map thins out at higher rates
+       (docs/superpowers/specs/2026-09-23-realtime-pipeline-findings.md, B1/B2). -->
+  <arg name="ts_rate" default="50"/>
+  <arg name="aa_window_ms" default="40"/>
   <arg name="opencv_threads" default="0"/>
   <!-- Overrides of the tracking config, empty = keep the config's value:
        stillness_hold:=true|false, motion_log:=/path/motion.csv (per-frame hold inputs) -->
