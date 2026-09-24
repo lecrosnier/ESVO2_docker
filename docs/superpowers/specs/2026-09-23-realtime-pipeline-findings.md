@@ -579,7 +579,7 @@ after.
 | Mapping's detached publishing threads (one per cycle) rebuilt the shared clouds, including the tracker's `pc_color_`, with no lock, and read `dqvDepthPoints_` and the status string while the mapping thread changed them. Inherited from upstream; the fork's ~20 Hz mapping made overlaps likelier | The publish decision is taken on the mapping thread and passed in; the clouds are rebuilt under `publish_mutex_`, which `reset()` also takes |
 | With `USE_IMU` set but no IMU data, mapping segfaulted: the initial orientation came from 0/0 samples and the back end dereferenced pre-integrations that were never created. The stock `system_upenn.launch` does exactly this (it never remaps the IMU) | The first IMU pose waits for samples; the back end is skipped until the whole window has IMU data. The stock launch now runs the whole of `indoor_flying1` (6,493 poses) |
 | The time-surface node, on a backward time jump (a looped bag, a clock step), insertion-sorted every new event past up to 5 M buffered ones and read its new look-up table at negative indices. The event bounds check also let x = width through | Jumps over 1 s drop the buffer and reset the per-pixel times and AA window; ages are clamped; bounds are `>=`. A looped 6 s slice of `hallway3`: a warning per jump, no deaths |
-| The gyro bias was estimated once, at startup | `GYRO_BIAS_REFRESH` (on for the EVK4) re-estimates it from each 2 s still window of a hold: 21–34 refreshes per hallway bag, changes of ~10^-4 rad/s |
+| The gyro bias was estimated once, at startup | `GYRO_BIAS_REFRESH` re-estimates it from each 2 s still window of a hold (21–34 refreshes per hallway bag, changes of ~10^-4 rad/s). **Left off**: see C23 |
 
 **Regression gate, same day, before → after:**
 
@@ -590,7 +590,9 @@ after.
 | `hallway4_lateral` legs, closure | 0.91 / 0.86 m, 0.05 m | 0.96 / 0.87 m, 0.09 m |
 | MVSEC `indoor_flying1` ATE (vision only), 2 runs each | 0.085 / 0.088 m | 0.092 / 0.086 m |
 
-All within run-to-run spread; 0 tracking resets throughout. All 45 C++ and 13
+All within run-to-run spread; 0 tracking resets throughout. (The "after"
+column is with `GYRO_BIAS_REFRESH` on, before C23 turned it off; the gate was
+re-run on `main` after that, see below.) All 45 C++ and 13
 Python unit tests pass.
 
 ## Part C — Dead ends, in the order they were tried
@@ -669,6 +671,16 @@ advance.
     zero-order hold and only the interval's ends need coverage. The rig's IMU
     runs at 200 Hz, so the gap case is minor; reverted rather than rewrite
     the tested contract.
+
+23. **Refreshing the gyro bias during holds (`GYRO_BIAS_REFRESH`).** The
+    first gate run on the merged `main` failed on `hallway4` leg 2 (0.791 m,
+    bound 0.80). An A/B on the same build, 3 runs each, alternating: leg 2
+    0.817 / 0.841 / 0.720 m with the refresh, 0.828 / 0.840 / 0.904 m without.
+    With the earlier runs, the refresh averages 0.81 m (5 runs) against
+    0.87 m without it or on the old code (8 runs). No mechanism found (the
+    bias moves by ~10^-4 rad/s), and 2-minute bags cannot show the thermal
+    drift it is for, so it stays in the code, off, until a long session with
+    ground truth can judge it.
 
 Two tooling traps also cost time: `rostopic hz` reports nothing useful under
 `use_sim_time` (use a subscriber node — `scripts/diagnostics/ratemon.py`), and

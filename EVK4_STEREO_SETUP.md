@@ -329,7 +329,7 @@ the same paths in the `sbg_ros_driver` clone.
   the EVK4 cfg, off by default), `STILL_WINDOW`, `ACC_STILL_MAX_STD`,
   `STILL_MIN_INFO`, `STILL_MIN_SUPPORT`, `HOLD_MAX_S`, `HOLD_MAP_GRACE_S`,
   `HOLD_COAST_S`, `GYRO_BIAS_REFRESH` (re-estimate the gyro bias during
-  holds); `GYRO_STILL_MAX_STD` is shared. Launch args
+  holds; off, not validated, see findings C23); `GYRO_STILL_MAX_STD` is shared. Launch args
   `stillness_hold:=true|false` and `motion_log:=file.csv` (per-frame
   decision log, see `scripts/diagnostics/motion_log_summary.py`). With the
   IMU unplugged, silent or frozen, the tracker behaves as before. Rules and

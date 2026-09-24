@@ -57,4 +57,7 @@ HOLD_MAP_GRACE_S: 1.0
 HOLD_COAST_S: 0.5
 # Re-estimate the gyro bias from every GYRO_BIAS_WINDOW-long still window of a hold
 # (the bias drifts with temperature over a session). Only for an estimated bias.
-GYRO_BIAS_REFRESH: True
+# Off: on the 2-minute hallway bags it showed no benefit, and hallway4's return leg
+# averaged 0.81 m with it (5 runs) against 0.87 m without (8 runs). Worth revisiting
+# on a long session with ground truth, where thermal drift would show.
+GYRO_BIAS_REFRESH: False
