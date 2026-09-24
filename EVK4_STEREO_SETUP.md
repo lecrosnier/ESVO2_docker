@@ -82,8 +82,11 @@ rig's launch files. `calib/evk4_stereo/` keeps the earlier calibration, which
 is still the right one for every bag recorded before the swap (`slide4_bias`,
 the wall bags, the golden capture). The tools and the procedure are in
 `esvo2_core/scripts/calibration/` (README there), including a way to validate
-a calibration against tape-measured distances. The notes below describe the
-original method.
+a calibration against tape-measured distances. Its `T_b_c` (IMU to rectified
+left camera) is the earlier one corrected for the new rectification, which
+rotated the rectified frame by 3.5°: R_b_c,new = R_b_c,old · R1,old · R1,newᵀ,
+assuming the left camera did not move against the IMU. Not yet validated on a
+capture with real rotation. The notes below describe the original method.
 
 1. Generate a chessboard pattern sized for your display's actual pixel
    pitch (so square size in meters is known exactly, not measured by eye).

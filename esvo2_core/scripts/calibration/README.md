@@ -34,8 +34,12 @@ Each detection step waits for `q`: move the board (or the rig as a whole,
 never one camera) so it covers the whole view, near and far and tilted, about
 30 views per step. In the synced step it must be seen by both cameras at once.
 
-`convert_to_esvo2.py` writes an identity `T_b_c`. Copy the IMU-to-camera
-rotation over from the previous calibration, or recalibrate it with
+`convert_to_esvo2.py` writes an identity `T_b_c`. `T_b_c` refers to the
+*rectified* left frame, so do not copy the previous one unchanged: a new
+rectification rotates that frame (by 3.5° on 2026-09-23) even when the IMU is
+untouched. If the left camera did not move against the IMU, use
+R_b_c,new = R_b_c,old · R1,old · R1,newᵀ (R1 = each `left.yaml`'s
+`rectification_matrix`). Otherwise recalibrate it with
 `../calibrate_imu_camera_rotation.py`.
 
 **Validate before trusting it.** Replay a bag of a scene with surfaces at
