@@ -144,6 +144,10 @@ namespace image_representation
     // Generation thread only, like vBatch_.
     std::vector<dvs_msgs::Event> vAAWindow_;
     double aa_window_s_;
+    // Backward time jumps: detected in eventsCallback() under data_mutex_,
+    // handled by the generation thread when it next takes a batch.
+    double last_event_t_ = 0.0;
+    bool bTimeJumped_ = false;
 
     cv::Mat representation_TS_;
     cv::Mat representation_AA_;

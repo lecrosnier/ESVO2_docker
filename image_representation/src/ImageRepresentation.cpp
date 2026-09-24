@@ -19,6 +19,8 @@ namespace image_representation
   // Time surface lookup table: 256 steps per decay constant, up to 6 of them.
   static const int kLutPerDecay = 256;
   static const int kLutSize = 6 * kLutPerDecay;
+  // An event this much older than the previous one means the clock went back.
+  static const double kBackwardJumpS = 1.0;
 
   ImageRepresentation::ImageRepresentation(ros::NodeHandle &nh, ros::NodeHandle nh_private) : nh_(nh)
   {
@@ -265,7 +267,9 @@ namespace image_representation
       uchar *dst = TS_img.ptr<uchar>(y);
       for (int x = 0; x < ts_map_.cols; x++)
       {
-        const int age = static_cast<int>((nowf - src[x]) * kLutPerDecay);
+        // A pixel newer than the render time cannot occur on a monotonic clock;
+        // clamp anyway rather than index the table out of range.
+        const int age = std::max(0, static_cast<int>((nowf - src[x]) * kLutPerDecay));
         dst[x] = age >= kLutSize ? 0 : lut_[age];
       }
     }
@@ -299,9 +303,17 @@ namespace image_representation
       // message. Holding it for the whole TS/AA/Sobel computation (25 to 50 ms
       // on the left node, against a 40 ms period) starved the callback: event
       // messages queued up for 100+ ms and the TS rendered black.
+      const bool timeJumped = bTimeJumped_;
+      bTimeJumped_ = false;
       vBatch_.assign(vEvents_.begin(), ptr_e);
       clearEvents(distance, ptr_e);
       lock.unlock();
+      if (timeJumped)
+      {
+        ts_map_.setTo(cv::Scalar(kTsMapEmpty));
+        ts_epoch_ = 0.0;
+        vAAWindow_.clear();
+      }
 
       const std::vector<dvs_msgs::Event> *aa_events = &vBatch_;
       if (aa_window_s_ > 0)
@@ -399,8 +411,19 @@ namespace image_representation
       init(msg->width, msg->height);
     for (const dvs_msgs::Event &e : msg->events)
     {
-      if (e.x > sensor_size_.width || e.y > sensor_size_.height)
+      if (e.x >= sensor_size_.width || e.y >= sensor_size_.height)
         continue;
+      // Time went backwards (a bag replayed in a loop, a clock step): drop what
+      // is buffered rather than insertion-sort every new event past all of it,
+      // and let the generation thread restart its per-pixel times.
+      const double te = e.ts.toSec();
+      if (last_event_t_ > 0.0 && te < last_event_t_ - kBackwardJumpS)
+      {
+        ROS_WARN("image_representation: event time jumped back %.3f s; restarting", last_event_t_ - te);
+        vEvents_.clear();
+        bTimeJumped_ = true;
+      }
+      last_event_t_ = te;
       vEvents_.push_back(e);
 
       int i = vEvents_.size() - 2;
