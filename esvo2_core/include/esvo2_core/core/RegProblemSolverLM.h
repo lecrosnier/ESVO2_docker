@@ -47,6 +47,10 @@ class RegProblemSolverLM
   bool solve_analytical();// faster
   // Translation-only solve for the next solve_analytical() (analytical problem only).
   void setFixRotation(bool fix);
+  // Smallest eigenvalue of J^T J / N at the last solution, over the last batch of N points
+  // (analytical problem only, -1 otherwise): how well the event residuals constrain the
+  // motion. translationOnly restricts it to the translation block, for rotation-locked frames.
+  double informationMinEig(bool translationOnly) const;
 
   // For test and visualization
   void setRegPublisher(image_transport::Publisher* reprojMap_pub);

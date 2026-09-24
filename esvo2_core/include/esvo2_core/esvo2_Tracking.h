@@ -37,6 +37,8 @@
 #include <esvo2_core/factor/imu_integration.h>
 #include <esvo2_core/tools/gyro_prediction.h>
 #include <esvo2_core/tools/gyro_bias.h>
+#include <esvo2_core/tools/stillness.h>
+#include <fstream>
 #include <memory>
 #include <events_repacking_tool/V_ba_bg.h>
 
@@ -94,6 +96,9 @@ namespace esvo2_core
         const std::string &source_frame);
     void renameOldTraj();
     Eigen::Matrix3d fixRotationMatrix(const Eigen::Matrix3d &R);
+    // Share of the time surface's fresh pixels (fired within one decay constant): per pixel,
+    // and the fraction of them in 8x8 cells holding at least 4 (edges cluster, noise does not).
+    static void eventActivity(const cv::Mat &ts, double &freshFrac, double &support);
 
   private:
     ros::NodeHandle nh_, pnh_;
@@ -183,6 +188,26 @@ namespace esvo2_core
     bool bLockThisFrame_ = false;
     size_t nLocked_ = 0; // frames locked since the last periodic prediction log
     std::string resultPath_;
+    // STILLNESS_HOLD: when the events cannot register the frame and the IMU says the rig is
+    // still, publish the last pose instead of resetting, and keep the last usable map.
+    bool bStillnessHold_ = false;
+    double stillMinInfo_ = 0.0;    // STILL_MIN_INFO: below it, a registration counts as unobservable
+    double stillMinSupport_ = 0.0; // STILL_MIN_SUPPORT: likewise for the time surface's structure
+    double sparseSinceT_ = -1.0;   // first sparse map rejected since the last usable one
+    double holdMaxS_ = 120.0;    // HOLD_MAX_S: longest hold before falling back to a reset
+    double mapGraceS_ = 1.0;     // HOLD_MAP_GRACE_S: keep the held map this long after a hold
+    tools::StillnessDetector stillDet_; // guarded by gyro_mutex_
+    bool bImuSeen_ = false, bImuLostWarned_ = false;
+    bool bHolding_ = false;
+    double holdStartT_ = 0.0, holdEndT_ = -1e9;
+    Eigen::Matrix<double, 4, 4> T_world_hold_;
+    double coastMaxS_ = 0.5;       // HOLD_COAST_S: longest coast while the IMU says moving
+    double coastStartT_ = -1.0;
+    bool bHoldTooLongWarned_ = false;
+    size_t nHold_ = 0, nCoast_ = 0;
+    ros::Time lastMapSeen_;
+    pcl::PointCloud<pcl::PointXYZRGBL>::Ptr refCloud_; // owns the points ref_ points into
+    std::ofstream motionLog_; // MOTION_LOG: per-frame CSV of the hold decision's inputs
 
     Eigen::Matrix<double, 4, 4> T_world_ref_;
     Eigen::Matrix<double, 4, 4> T_world_cur_;

@@ -31,3 +31,26 @@ IMU_TIME_OFFSET: -0.005
 IMU_ROTATION_LOCK: True
 GYRO_BIAS_WINDOW: 2.0
 GYRO_STILL_MAX_STD: 0.0035
+# Hold at rest (docs/superpowers/specs/2026-09-23-realtime-pipeline-findings.md, part F).
+# A still event camera sees almost nothing: without this, every stop empties the map and
+# resets the system. Events decide first; when they cannot register a frame (map below
+# BATCH_SIZE, the smallest eigenvalue of J^T J/N below STILL_MIN_INFO, or under
+# STILL_MIN_SUPPORT of the time surface's fresh pixels in clusters of 4+ per 8x8), a fresh and quiet
+# IMU (/imu/data_synced: gyro std < GYRO_STILL_MAX_STD and accelerometer std <
+# ACC_STILL_MAX_STD over STILL_WINDOW s) holds the last pose instead of resetting. A missing,
+# stale or frozen IMU is never still, so without it the tracker resets as upstream does.
+STILLNESS_HOLD: True
+STILL_WINDOW: 0.5
+ACC_STILL_MAX_STD: 0.03
+# hallway2 (rotation-locked frames): moving p5 4e5, the few registered still frames 5e4-2.6e5
+STILL_MIN_INFO: 100000.0
+# fresh pixels in clustered cells: ~0.9 moving, ~0 on a still camera's noise
+STILL_MIN_SUPPORT: 0.2
+HOLD_MAX_S: 120.0
+HOLD_MAP_GRACE_S: 1.0
+# A frame the events cannot support is never published. With the IMU saying "moving" and a
+# quiet time surface (the rig starting to roll shakes the accelerometer ~0.2 s before the
+# scene shows anything; a cart being handled), the tracker coasts on the last pose: the
+# events see no motion. With an active time surface it coasts for at most HOLD_COAST_S, then
+# falls back to upstream.
+HOLD_COAST_S: 0.5

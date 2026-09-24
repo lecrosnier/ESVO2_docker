@@ -1,4 +1,5 @@
 #include <esvo2_core/esvo2_Tracking.h>
+#include <iomanip>
 #include <esvo2_core/tools/TicToc.h>
 #include <esvo2_core/tools/params_helper.h>
 #include <minkindr_conversions/kindr_tf.h>
@@ -99,6 +100,29 @@ esvo2_Tracking::esvo2_Tracking(
   if (bImuRotationLock_)
     LOG(INFO) << "IMU rotation lock enabled: rotation from the gyro, translation-only registration";
   lastPredLog_ = ros::WallTime::now();
+  // Hold at rest. A still event camera sees almost nothing, so the map empties and upstream
+  // resets the whole system at every stop. Events decide first: a frame the events can
+  // register is tracked whatever the IMU says. Only a frame they cannot register (map too
+  // sparse, or J^T J below STILL_MIN_INFO) asks the IMU, and only an IMU that is fresh and
+  // quiet (tools::StillnessDetector) turns the reset into a hold. A missing, stale or frozen
+  // IMU is never "still", so losing the IMU falls back to upstream behaviour.
+  bStillnessHold_ = tools::param(pnh_, "STILLNESS_HOLD", false);
+  stillMinInfo_ = tools::param(pnh_, "STILL_MIN_INFO", 0.0);
+  stillMinSupport_ = tools::param(pnh_, "STILL_MIN_SUPPORT", 0.0);
+  holdMaxS_ = tools::param(pnh_, "HOLD_MAX_S", 120.0);
+  mapGraceS_ = tools::param(pnh_, "HOLD_MAP_GRACE_S", 1.0);
+  coastMaxS_ = tools::param(pnh_, "HOLD_COAST_S", 0.5);
+  stillDet_ = tools::StillnessDetector(tools::param(pnh_, "STILL_WINDOW", 0.5), gyroBiasMaxStd_,
+                                       tools::param(pnh_, "ACC_STILL_MAX_STD", 0.03));
+  const std::string motionLogPath = tools::param(pnh_, "MOTION_LOG", std::string());
+  if (!motionLogPath.empty())
+  {
+    motionLog_.open(motionLogPath);
+    motionLog_ << "t,action,ref_pts,imu,gyro_std,acc_std,imu_age,fresh,support,info,locked,x,y,z\n";
+  }
+  if (bStillnessHold_)
+    LOG(INFO) << "Stillness hold enabled: STILL_MIN_INFO " << stillMinInfo_ << ", STILL_MIN_SUPPORT "
+              << stillMinSupport_ << ", HOLD_MAX_S " << holdMaxS_;
   resultPath_             = tools::param(pnh_, "PATH_TO_SAVE_TRAJECTORY", std::string());
   nh_.setParam("/ESVO2_SYSTEM_STATUS", ESVO2_System_Status_);
 
@@ -116,11 +140,12 @@ esvo2_Tracking::esvo2_Tracking(
   map_sub_ = nh_.subscribe("pointcloud", 0, &esvo2_Tracking::refMapCallback, this);// local map in the ref view.
   stampedPose_sub_ = nh_.subscribe("stamped_pose", 0, &esvo2_Tracking::stampedPoseCallback, this);// for accessing the pose of the ref view.
   imu_sub_ = nh_.subscribe("/imu/data", 0, &esvo2_Tracking::refImuCallback, this);// local map in the ref view.
+  if (bImuRotationPrediction_ || bStillnessHold_ || motionLog_.is_open())
+    imu_prediction_sub_ = nh_.subscribe("imu_prediction", 2000, &esvo2_Tracking::imuPredictionCallback, this);
   if (bImuRotationPrediction_)
   {
     if (bUseImu_)
       LOG(WARNING) << "IMU_ROTATION_PREDICTION is ignored while USE_IMU is true";
-    imu_prediction_sub_ = nh_.subscribe("imu_prediction", 2000, &esvo2_Tracking::imuPredictionCallback, this);
     LOG(INFO) << "IMU rotation prediction enabled, IMU_TIME_OFFSET = " << imuTimeOffset_ << " s";
     if (bGyroBiasKnown_)
       LOG(INFO) << "Gyro bias from GYRO_BIAS: " << gyroBias_.transpose() << " rad/s";
@@ -138,6 +163,7 @@ esvo2_Tracking::esvo2_Tracking(
 
   /*** Tracker ***/
   T_world_cur_ = Eigen::Matrix<double,4,4>::Identity();
+  T_world_hold_ = T_world_cur_;
   t_world_cur_ = last_t_world_cur_ = last_t_ = Eigen::Vector3d::Zero();
   std::thread TrackingThread(&esvo2_Tracking::TrackingLoop, this);
   TrackingThread.detach();
@@ -184,7 +210,7 @@ void esvo2_Tracking::TrackingLoop()
     // Data Transfer (If mapping node had published refPC.)
     {
       std::lock_guard<std::mutex> lock(data_mutex_);
-      if(ref_.t_.toSec() < refPCMap_.rbegin()->first.toSec())// new reference map arrived
+      if(lastMapSeen_ < refPCMap_.rbegin()->first)// new reference map arrived
         refDataTransferring();
       if(cur_.t_.toSec() < TS_history_.rbegin()->first.toSec())// new observation arrived
       {
@@ -207,8 +233,66 @@ void esvo2_Tracking::TrackingLoop()
 
     // create new regProblem
     double t_resetRegProblem, t_solve, t_pub_result;
+    const double tCur = cur_.t_.toSec();
+    const bool wasWorking = ets_ == WORKING;
+    const bool canRegister = ref_.vPointXYZPtr_.size() >= rpConfigPtr_->BATCH_SIZE_;
+    tools::Motion imuMotion = tools::Motion::UNKNOWN;
+    double gyroStd = -1.0, accStd = -1.0, imuAge = 1e9;
+    if(bStillnessHold_ || motionLog_.is_open())
+    {
+      std::lock_guard<std::mutex> lock(gyro_mutex_);
+      const double tImu = tCur - imuTimeOffset_; // camera time = IMU time + IMU_TIME_OFFSET
+      imuMotion = stillDet_.classify(tImu);
+      gyroStd = stillDet_.gyroStd();
+      accStd = stillDet_.accStd();
+      imuAge = stillDet_.age(tImu);
+    }
+    if(bStillnessHold_)
+    {
+      if(imuAge > 0.1 && !bImuLostWarned_)
+      {
+        LOG(WARNING) << "Stillness hold: " << (bImuSeen_ ? "IMU silent" : "no IMU yet")
+                     << " on imu_prediction; holding disabled until it streams";
+        bImuLostWarned_ = true;
+      }
+      else if(imuAge <= 0.1 && bImuLostWarned_)
+      {
+        LOG(INFO) << "Stillness hold: IMU streaming again";
+        bImuLostWarned_ = false;
+      }
+    }
+    // Events first. A registration counts only when the events support it: the smallest
+    // eigenvalue of J^T J/N reaches STILL_MIN_INFO and, if the IMU says still, the time
+    // surface shows structure (STILL_MIN_SUPPORT); a still camera matches the map against an
+    // empty time surface and drifts. A frame the events cannot support is never published;
+    // the last pose is republished instead:
+    //  - IMU still: hold.
+    //  - IMU moving, time surface quiet: the events see no motion relative to the scene (the
+    //    cart being handled, or starting to roll before the scene shows anything), and they
+    //    outrank the IMU: coast on the last pose.
+    //  - IMU moving, time surface active but the registration unusable: coast for at most
+    //    HOLD_COAST_S, then upstream behaviour.
+    // Registration is absolute against the map, so a skipped frame loses nothing. Holds and
+    // coasts end after HOLD_MAX_S. Without a usable IMU, or before tracking has started:
+    // upstream behaviour, publish the registration if there is one, else reset.
+    double info = -1.0, fresh = -1.0, support = -1.0;
+    if((bStillnessHold_ && wasWorking) || motionLog_.is_open())
+      if(cur_.pTsObs_ && cur_.pTsObs_->cvImagePtr_left_)
+        eventActivity(cur_.pTsObs_->cvImagePtr_left_->image, fresh, support);
+    const bool eventsQuiet = support >= 0.0 && support < stillMinSupport_;
+    const bool holdTooLong = (bHolding_ && tCur - holdStartT_ > holdMaxS_) ||
+                             (coastStartT_ >= 0.0 && tCur - coastStartT_ > holdMaxS_);
+    if(holdTooLong && !bHoldTooLongWarned_)
+    {
+      LOG(WARNING) << "Stillness hold: held for more than HOLD_MAX_S = " << holdMaxS_ << " s; no longer holding";
+      bHoldTooLongWarned_ = true;
+    }
+    const bool canHold = bStillnessHold_ && wasWorking && imuMotion == tools::Motion::STILL && !holdTooLong;
+    const bool canCoast = bStillnessHold_ && wasWorking && imuMotion == tools::Motion::MOVING && !holdTooLong &&
+                          (eventsQuiet || coastStartT_ < 0.0 || tCur - coastStartT_ < coastMaxS_);
 
-    if(rpSolver_.resetRegProblem(&ref_, &cur_))
+    bool registered = false;
+    if(canRegister && rpSolver_.resetRegProblem(&ref_, &cur_))
     {
       if(ets_ == IDLE)
         ets_ = WORKING;
@@ -224,9 +308,28 @@ void esvo2_Tracking::TrackingLoop()
         rpSolver_.solve_numerical();
       if(rpType_ == REG_ANALYTICAL)
         rpSolver_.solve_analytical();
+      if(bStillnessHold_ || motionLog_.is_open())
+        info = rpSolver_.informationMinEig(bLockThisFrame_);
+      registered = true;
+    }
+    const bool observable = registered &&
+        (!bStillnessHold_ || (info >= stillMinInfo_ && (imuMotion != tools::Motion::STILL || support >= stillMinSupport_)));
 
+    const char *action;
+    if(observable || (registered && !canHold && !canCoast))
+    {
+      action = "TRACK";
       T_world_cur_ = cur_.tr_.getTransformationMatrix();
       t_world_cur_ = T_world_cur_.block(0, 3, 3, 1);
+      T_world_hold_ = T_world_cur_;
+      if(bHolding_)
+      {
+        LOG(INFO) << "Stillness hold: released after " << tCur - holdStartT_ << " s (" << nHold_ << " frames held, "
+                  << nCoast_ << " coasted)";
+        bHolding_ = false;
+        holdEndT_ = tCur;
+      }
+      coastStartT_ = -1.0;
       publishPose(cur_.t_, cur_.tr_);
       if(bVisualizeTrajectory_)
         publishPath(cur_.t_, cur_.tr_);
@@ -239,10 +342,71 @@ void esvo2_Tracking::TrackingLoop()
         lPose_.push_back(cur_.tr_.getTransformationMatrix());
       }
     }
+    else if(canHold || canCoast)
+    {
+      // Republish the last tracked pose at this frame's time: mapping needs a pose for every
+      // time surface (it resets itself after 0.5 s without one).
+      if(canHold)
+      {
+        action = "HOLD";
+        coastStartT_ = -1.0;
+        if(!bHolding_)
+        {
+          bHolding_ = true;
+          bHoldTooLongWarned_ = false;
+          holdStartT_ = tCur;
+          nHold_ = nCoast_ = 0;
+          LOG(INFO) << "Stillness hold: started (" << (canRegister ? "events uninformative" : "map too sparse")
+                    << ", gyro std " << gyroStd << ", acc std " << accStd << ")";
+        }
+        nHold_++;
+      }
+      else
+      {
+        action = "COAST";
+        if(coastStartT_ < 0.0)
+        {
+          coastStartT_ = tCur;
+          if(!bHolding_)
+            bHoldTooLongWarned_ = false;
+        }
+        nCoast_++;
+      }
+      T_world_cur_ = T_world_hold_;
+      t_world_cur_ = T_world_cur_.block(0, 3, 3, 1);
+      cur_.tr_ = Transformation(T_world_cur_);
+      publishPose(cur_.t_, cur_.tr_);
+      if(bVisualizeTrajectory_)
+        publishPath(cur_.t_, cur_.tr_);
+      if(bSaveTrajectory_)
+      {
+        lTimestamp_.push_back(std::to_string(cur_.t_.toSec()));
+        lPose_.push_back(cur_.tr_.getTransformationMatrix());
+      }
+    }
     else
     {
+      action = "RESET";
+      if(!canRegister)
+        rpSolver_.resetRegProblem(&ref_, &cur_); // fails; logs the upstream re-initialisation message
       nh_.setParam("/ESVO2_SYSTEM_STATUS", "INITIALIZATION");
       ets_ = IDLE;
+      coastStartT_ = -1.0;
+      if(bHolding_)
+      {
+        bHolding_ = false;
+        holdEndT_ = tCur;
+      }
+    }
+
+    if(motionLog_.is_open())
+    {
+      const Eigen::Vector3d p = cur_.tr_.getPosition();
+      motionLog_ << std::fixed << std::setprecision(4) << tCur << ',' << action << ','
+                 << ref_.vPointXYZPtr_.size() << ',' << tools::motionName(imuMotion) << ','
+                 << std::setprecision(6) << gyroStd << ',' << accStd << ',' << std::min(imuAge, 99.0) << ','
+                 << fresh << ',' << support << ',' << std::scientific << info << std::fixed << ','
+                 << bLockThisFrame_ << ',' << p.x() << ',' << p.y() << ',' << p.z() << std::endl;
     }
     std::ofstream f;
 
@@ -267,6 +431,22 @@ void esvo2_Tracking::TrackingLoop()
 bool
 esvo2_Tracking::refDataTransferring()
 {
+  lastMapSeen_ = refPCMap_.rbegin()->first;
+  // Keep a usable map rather than swap in a near-empty one: while holding (the rig has not
+  // moved, so the old map is still valid), and for HOLD_MAP_GRACE_S after the first sparse map
+  // or the end of a hold (the rig is slowing down, or mapping is refilling). A rig that keeps
+  // moving on sparse maps past the grace adopts them, and resets as upstream does.
+  const size_t batch = rpConfigPtr_->BATCH_SIZE_;
+  if(refPCMap_.rbegin()->second->size() >= batch)
+    sparseSinceT_ = -1.0;
+  else if(bStillnessHold_ && ets_ == WORKING && refCloud_ && refCloud_->size() >= batch)
+  {
+    if(sparseSinceT_ < 0.0)
+      sparseSinceT_ = cur_.t_.toSec();
+    if(bHolding_ || cur_.t_.toSec() - std::max(sparseSinceT_, holdEndT_) < mapGraceS_)
+      return true;
+  }
+
   // load reference info
   ref_.t_ = ros::Time(refPCMap_.rbegin()->first.toSec());
   ros::Time t = ros::Time(refPCMap_.rbegin()->first.toSec()-0.001);
@@ -286,6 +466,7 @@ esvo2_Tracking::refDataTransferring()
   }
 
   // get the point cloud
+  refCloud_ = refPCMap_.rbegin()->second;
   size_t numPoint = refPCMap_.rbegin()->second->size();
   ref_.vPointXYZPtr_.clear();
   ref_.vPointXYZPtr_.reserve(numPoint);
@@ -412,6 +593,7 @@ void esvo2_Tracking::reset()
 {
   // clear all maintained data
   ets_ = IDLE;
+  bHolding_ = false;
   TS_id_ = 0;
   TS_history_.clear();
   refPCMap_.clear();
@@ -737,6 +919,32 @@ void esvo2_Tracking::groundTruthCallback(const geometry_msgs::PoseStampedConstPt
   f.close();
 }
 
+void esvo2_Tracking::eventActivity(const cv::Mat &ts, double &freshFrac, double &support)
+{
+  freshFrac = support = -1.0;
+  if (ts.empty() || ts.type() != CV_8UC1)
+    return;
+  // The time surface is 255 * exp(-age / decay): above 255 / e, the pixel fired within one decay.
+  constexpr int kCell = 8;
+  cv::Mat fresh;
+  cv::threshold(ts, fresh, 94, 1.0, cv::THRESH_BINARY);
+  fresh.convertTo(fresh, CV_32F);
+  cv::Mat cells;
+  cv::resize(fresh(cv::Rect(0, 0, ts.cols / kCell * kCell, ts.rows / kCell * kCell)), cells,
+             cv::Size(ts.cols / kCell, ts.rows / kCell), 0, 0, cv::INTER_AREA);
+  double total = 0.0, supported = 0.0;
+  for (int r = 0; r < cells.rows; r++)
+    for (int c = 0; c < cells.cols; c++)
+    {
+      const double n = std::round(cells.at<float>(r, c) * kCell * kCell);
+      total += n;
+      if (n >= 4)
+        supported += n;
+    }
+  freshFrac = total / static_cast<double>(ts.rows * ts.cols);
+  support = total > 0 ? supported / total : 0.0;
+}
+
 Eigen::Matrix3d esvo2_Tracking::fixRotationMatrix(const Eigen::Matrix3d& R) {
     Eigen::JacobiSVD<Eigen::MatrixXd> svd(R, Eigen::ComputeFullU | Eigen::ComputeFullV);
     Eigen::Matrix3d U = svd.matrixU();
@@ -748,6 +956,9 @@ void esvo2_Tracking::imuPredictionCallback(const sensor_msgs::ImuConstPtr &msg)
 {
   std::lock_guard<std::mutex> lock(gyro_mutex_);
   const double t = msg->header.stamp.toSec();
+  stillDet_.add({t, Eigen::Vector3d(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z),
+                 Eigen::Vector3d(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z)});
+  bImuSeen_ = true;
   if (!gyroBuf_.empty() && t < gyroBuf_.back().t - 2.0)
   {
     // Stamp jumped backwards further than the buffer span (clock step, sim time reset, bag

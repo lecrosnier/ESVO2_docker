@@ -16,6 +16,10 @@
   <arg name="ts_rate" default="25"/>
   <arg name="aa_window_ms" default="0"/>
   <arg name="opencv_threads" default="0"/>
+  <!-- Overrides of the tracking config, empty = keep the config's value:
+       stillness_hold:=true|false, motion_log:=/path/motion.csv (per-frame hold inputs) -->
+  <arg name="stillness_hold" default=""/>
+  <arg name="motion_log" default=""/>
 
   <!-- Calibration folder -->
   <!-- The camera mounts were swapped before 2026-09-23 and the rig was
@@ -95,6 +99,8 @@
     <rosparam param="calibInfoDir" subst_value="true">$(arg calibInfoDirStr)</rosparam>
 
     <rosparam command="load" file="$(arg tracking_cfg)" />
+    <param if="$(eval arg('stillness_hold') != '')" name="STILLNESS_HOLD" value="$(arg stillness_hold)" type="bool" />
+    <param if="$(eval arg('motion_log') != '')" name="MOTION_LOG" value="$(arg motion_log)" />
   </node>
 
   <!-- Visualization -->

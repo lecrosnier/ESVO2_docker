@@ -113,6 +113,10 @@ if(CATKIN_ENABLE_TESTING)
   if(TARGET test_gyro_bias)
     target_link_libraries(test_gyro_bias gtest_main)
   endif()
+  catkin_add_gtest(test_stillness test/test_stillness.cpp)
+  if(TARGET test_stillness)
+    target_link_libraries(test_stillness gtest_main)
+  endif()
   # gtest linked against the core library. ESVO2_CORE_SOURCE_DIR lets a test
   # find calib/ and cfg/ in the source tree.
   function(esvo2_core_add_lib_gtest name)

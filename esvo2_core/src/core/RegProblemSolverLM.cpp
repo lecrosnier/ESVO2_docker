@@ -1,5 +1,6 @@
 #include <esvo2_core/core/RegProblemSolverLM.h>
 #include <cmath>
+#include <Eigen/Eigenvalues>
 #include <esvo2_core/tools/cayley.h>
 
 namespace esvo2_core
@@ -251,6 +252,20 @@ bool RegProblemSolverLM::solve_analytical()
   lmStatics_.nfev_ = nfev;
   lmStatics_.nIter_ = iteration;
   return 0;
+}
+
+double RegProblemSolverLM::informationMinEig(bool translationOnly) const
+{
+  if (rpType_ != REG_ANALYTICAL || !regProblemPtr_ || regProblemPtr_->numPoints_ == 0)
+    return -1.0;
+  // df() linearises at x = 0, i.e. at the current estimate (addMotionUpdate folds every step in).
+  Eigen::MatrixXd J;
+  regProblemPtr_->df(Eigen::Matrix<double, 6, 1>::Zero(), J);
+  const Eigen::Matrix<double, 6, 6> H = J.transpose() * J / static_cast<double>(J.rows());
+  if (translationOnly) // x = [Cayley rotation, translation]
+    return Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d>(H.bottomRightCorner<3, 3>(), Eigen::EigenvaluesOnly)
+        .eigenvalues()(0);
+  return Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>>(H, Eigen::EigenvaluesOnly).eigenvalues()(0);
 }
 
 void RegProblemSolverLM::setFixRotation(bool fix)
