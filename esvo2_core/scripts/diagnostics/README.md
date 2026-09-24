@@ -13,6 +13,8 @@ running system (or a replay) and a roscore.
 | `eval_excursion.py POSES.bag [m]` | Scores an out-and-back run with no stops, against the far-point distance and a return to the start. |
 | `render_events_video.py BAG OUT.mp4` | Side-by-side left/right event video of a stereo bag, decoded straight from the raw bytes. |
 | `retype_vector.py LEFT.bag RIGHT.bag IMU.bag OUT.bag` | Makes VECtor's bags playable here. Its `prophesee_event_msgs/EventArray` has the same layout as `dvs_msgs/EventArray` (same md5), so messages are rewritten raw, without deserialising, under the topic names the launch files expect. |
+| `motion_log_summary.py LOG.csv [min_frames]` | Why did the tracker hold, coast or reset? Summarises the per-frame log written with the launch arg `motion_log:=LOG.csv`: decisions by IMU state, the inputs' distributions (J^T J, time-surface structure, map size), and a timeline. |
+| `imu_cut_relay.py STAMP` | What happens when the IMU dies? Relays `/imu_raw` to `/imu/data_synced` until `STAMP`, then drops it; replay with `PLAYARGS="/imu/data_synced:=/imu_raw"`. |
 | `rebag_events.py IN.bag OUT.bag [chunk_s]` | Splits `dvs_msgs/EventArray` messages into `chunk_s` slices (default 5 ms), keeping the IMU topics. Datasets that batch events at 30 Hz cap the time surface rate, because a surface is only rendered when an event message arrives. |
 
 Typical use, alongside a replay:

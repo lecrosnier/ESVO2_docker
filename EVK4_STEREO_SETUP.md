@@ -313,6 +313,20 @@ the same paths in the `sbg_ros_driver` clone.
   std-dev threshold, rad/s, for a window to count as "still"). Enabled in
   the EVK4 tracking cfg; see "Current status" and "Gotchas" for the
   measured effect.
+- **New (2026-09-24, branch `evk4-stillness-hold`):** the tracker holds its
+  pose at rest instead of resetting (`esvo2_core/include/esvo2_core/tools/stillness.h`,
+  gtest `test_stillness`). A still event camera sees almost nothing, and
+  upstream reset the whole system at every stop. Events decide first; only a
+  frame they cannot register asks the IMU (`/imu/data_synced`, gyro and
+  accelerometer). New `tracking_evk4_AA.yaml` keys: `STILLNESS_HOLD` (on in
+  the EVK4 cfg, off by default), `STILL_WINDOW`, `ACC_STILL_MAX_STD`,
+  `STILL_MIN_INFO`, `STILL_MIN_SUPPORT`, `HOLD_MAX_S`, `HOLD_MAP_GRACE_S`,
+  `HOLD_COAST_S`; `GYRO_STILL_MAX_STD` is shared. Launch args
+  `stillness_hold:=true|false` and `motion_log:=file.csv` (per-frame
+  decision log, see `scripts/diagnostics/motion_log_summary.py`). With the
+  IMU unplugged, silent or frozen, the tracker behaves as before. Rules and
+  measurements: part B3 of
+  `docs/superpowers/specs/2026-09-23-realtime-pipeline-findings.md`.
 - **New:** replay/evaluation tooling for regression-testing tracking
   against recorded bags instead of the live rig:
   `esvo2_core/scripts/replay_eval.sh` (plays a bag through a launch file,

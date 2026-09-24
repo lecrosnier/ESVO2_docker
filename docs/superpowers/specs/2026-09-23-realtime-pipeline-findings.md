@@ -6,7 +6,7 @@ worse on the live rig — with the measurements behind each conclusion, and the
 hypotheses that turned out to be wrong.
 
 Branch: `evk4-ts-rate-aa-window`, seven commits on top of
-`evk4-gyro-locked-tracking`.
+`evk4-gyro-locked-tracking`; Part B3 is on `evk4-stillness-hold`, on top of it.
 
 ## Summary
 
@@ -469,6 +469,80 @@ used by the gyro lock) was not recalibrated and is probably stale too.
   cause: its detection step ended at once and the error came from stopping
   the camera abruptly. What made it work on the third try is not certain.
 
+## Part B3 — Holding state at rest (2026-09-24, branch `evk4-stillness-hold`)
+
+A still event camera in a quiet scene sees almost nothing. Mapping's local map
+thins below `BATCH_SIZE` (300 points; ~120 in the hallway), registration
+refuses, and upstream sets the whole system back to `INITIALIZATION`: the
+reference pose restarts at identity and mapping re-runs SGM. On `hallway2`
+(stop-and-go, 2/2/3/3 m legs) that is 3,504 tracking resets and 930 SGM
+re-initialisations, and the bag cannot be scored at all: every leg starts from
+zero.
+
+**What the tracker now does (`STILLNESS_HOLD`, on in the EVK4 config, off by
+default).** Events decide first; the IMU is asked only when they cannot.
+
+| Events | IMU (`/imu/data_synced`) | Tracker |
+|---|---|---|
+| Registration supported: J^T J/N ≥ `STILL_MIN_INFO` (and, if the IMU says still, time-surface structure ≥ `STILL_MIN_SUPPORT`) | any | publish the registration |
+| Not supported, or map too sparse | still | **hold**: republish the last pose |
+| Not supported, time surface quiet | moving | **coast** on the last pose (events see no motion) |
+| Not supported, time surface active | moving | coast ≤ `HOLD_COAST_S` (0.5 s), then upstream |
+| any | missing, stale, gappy or frozen | upstream: publish the registration if any, else reset |
+
+- *Stillness* (`tools/stillness.h`, 11 unit tests): over the last 0.5 s, gyro
+  std < 0.0035 rad/s, |gyro mean| < 0.02 rad/s and accelerometer std < 0.03 m/s².
+  The accelerometer is needed because a cart rolling straight barely rotates.
+  No sample within 0.1 s, a gap over 20 ms, a window under 90% full or a window
+  with no noise at all (a driver repeating its last message) give `UNKNOWN`,
+  never "still".
+- *Observability*: the smallest eigenvalue of J^T J/N from the last LM batch
+  (translation block when the rotation is locked). Moving frames: p5 4×10^5;
+  frames registered on a still camera: 5×10^4–2.6×10^5. Threshold 10^5.
+- *Structure*: from the time surface the tracker already has (8-bit,
+  255·exp(−age/20 ms)), the share of pixels fired within one decay constant
+  that sit in 8×8 cells holding ≥ 4 of them. Noise is isolated, edges cluster:
+  ~0.9 moving, ~0 on a still camera. The same metric on raw events over the
+  three hallway bags: median 0.95 moving, 0.01–0.02 still; event rate
+  1.4 M ev/s vs 25 k ev/s.
+- *Map*: while holding, and for `HOLD_MAP_GRACE_S` (1 s) after the first sparse
+  map or the end of a hold, the tracker keeps its last map with ≥ `BATCH_SIZE`
+  points instead of swapping in a near-empty one. It now owns that cloud
+  (`refCloud_`), so the points outlive `refPCMap_`'s eviction.
+- A hold always publishes a pose: mapping resets itself when poses stop for
+  0.5 s (`stampedPoseCallback`), so "hold" must never mean "stay silent".
+- `HOLD_MAX_S` (120 s) ends any hold or coast. `MOTION_LOG:=file.csv` (launch
+  arg `motion_log`) writes every frame's inputs and decision; `stillness_hold`
+  overrides the config from the launch line.
+
+**Results** (1× replay, new calibration unless noted):
+
+| Bag | Hold off | Hold on |
+|---|---|---|
+| `hallway2`, legs 2 / 2 / 3 / 3 m | 3,504 resets; each leg from zero | **1.94 / 1.86 / 2.93 / 2.86 m**, closure 0.27 m over 10 m, 0 resets |
+| `hallway3`, far points 2.00 m | 1.97 / 1.90 m, closure 0.11 m, 2,041 resets | 2.05 / 2.01 m, closure 0.16 m, 0 resets |
+| `hallway4_lateral`, 1.00 m out and back | −0.48 / +1.29 m, closure 0.83 m, 3,498 resets | **−0.89 / +0.87 m**, closure 0.12 m, 0 resets |
+| `slide4_bias` (old calib), 3 runs each | out 1.04 / 1.01 / 1.04, back 0.96 / 1.04 / 0.94 | out 1.01 / 0.96 / 1.02, back 0.88 / 0.92 / 0.89 |
+| `hallway2`, IMU cut 55 s in | — | holds until the cut; after it one warning, then upstream behaviour (resets at stops), tracking and mapping keep publishing |
+
+`slide4_bias` looks like a regression on the return leg and is not one. That
+near, textured wall still produces events at rest, so with the hold off the
+tracker keeps registering, and drifts, during the stops: −5 cm over 33–42 s,
+−9 cm over 53–69 s. `eval_roundtrip.py` averages the pose over each stop, so
+that drift lengthened the measured return leg. During the motion itself both
+modes measure the same leg (43 → 52 s: 0.895 m off, 0.884 m on).
+
+**Residuals.**
+- One 10 cm jump on `hallway3`, while decelerating into the last stop: the IMU
+  still said "moving", J^T J was just above threshold (1.25×10^5) on a quiet
+  time surface. Vetoing quiet frames while moving is not the fix: 7–10% of
+  genuinely moving frames have a quiet surface, in runs up to 0.7 s, and
+  register well (median 4×10^5). A speed gate against the IMU would be.
+- The forward legs are still 2–7% short (B2); the hold only stopped resets from
+  hiding it.
+- `T_b_c` (see Part E): the new stereo calibration rotated the *rectified*
+  left frame by 3.5° (mostly about y), and `T_b_c` refers to that frame.
+
 ## Part C — Dead ends, in the order they were tried
 
 Recorded because each one cost time and none of them is obviously wrong in
@@ -514,6 +588,23 @@ advance.
     −0.06 m to −0.79 m. Map age drives the **z-drift**; the legs were the
     callback cost (B6).
 
+15. **Holding without keeping the map (B3).** The first version held only
+    while the newest map was unusable, but by then it had already been swapped
+    in (9 points). The rig then reset the moment it moved.
+16. **Registration alone as the "events can see" test.** At rest the held map
+    registers against an empty time surface with J^T J just above any sensible
+    threshold, and the pose wandered 0.9 m over a 27 s stop. Hence the
+    time-surface structure test.
+17. **Trusting a "moving" IMU at the start of a leg.** The accelerometer crosses
+    its threshold ~0.2 s before the scene shows anything; publishing those
+    registrations (J^T J 10^2–10^4) jumped 0.2–0.6 m. Hence coasting.
+18. **A fixed cap on coasting.** With the cart being handled at the end of
+    `hallway2`, the cap expired on a still-empty time surface and an
+    uninformed registration (J^T J 553) jumped 0.9 m. A quiet time surface now
+    means "no motion" whatever the IMU says.
+19. **`STILL_MIN_INFO: 1.0e5` in YAML.** PyYAML, and rosparam, read it as a
+    string (YAML 1.1 needs `1.0e+5`). Written as `100000.0`.
+
 Two tooling traps also cost time: `rostopic hz` reports nothing useful under
 `use_sim_time` (use a subscriber node — `scripts/diagnostics/ratemon.py`), and
 `pkill -f <script>` matches the shell running it.
@@ -529,6 +620,10 @@ Two tooling traps also cost time: `rostopic hz` reports nothing useful under
 - `scripts/diagnostics/ratemon.py` — delivered rates of time surfaces and poses.
 - `scripts/diagnostics/pcmon.py`, `pcdepth.py` — local map size, and map depth
   by phase.
+- `motion_log:=file.csv` + `scripts/diagnostics/motion_log_summary.py` — every
+  tracking frame's hold inputs and decision, and a timeline of them (B3).
+- `scripts/diagnostics/imu_cut_relay.py` — replays with the IMU dying at a
+  chosen stamp.
 
 Replay at 0.5× and 1× and compare: if a change helps at 0.5× but not 1×, it is
 a compute or latency problem; if it fails at both, it is the algorithm or the
@@ -537,9 +632,13 @@ single run misled this investigation more than once.
 
 ## Part E — Open
 
-- **Holding state at rest (B2).** The tracker resets whenever the rig stops.
-- **The remaining forward under-estimate (B2)**, 5–10% on later legs.
-- **`T_b_c` after the mount swap (B2)** is probably stale.
+- **The remaining forward under-estimate (B2, B3)**, 2–7% per leg on `hallway2`.
+- **`T_b_c` after the mount swap (B2).** The IMU was not touched, but the new
+  stereo calibration rotated the rectified left frame, which `T_b_c` refers to,
+  by 3.5°. If the left camera itself did not move, the correction needs no rig:
+  R_b_c,new = R_b_c,old · R1,old · R1,newᵀ (the `rectification_matrix` of each
+  `left.yaml`). Otherwise recalibrate with `calibrate_imu_camera_rotation.py`.
+- **A speed gate** against the IMU for the rare registration that jumps (B3).
 - **Z-drift** (on the pre-swap rig). Closure along the optical axis was −0.41 to −0.79 m at 1× and
   −0.29 m at 0.5×, against a few cm in x. Map age drives it (C14), and the flat
   wall makes z the softest direction to absorb error. Untested: whether a scene
