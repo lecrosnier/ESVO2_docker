@@ -15,7 +15,8 @@ The rig was recalibrated on 2026-09-23 after its camera mounts were swapped, whi
 - `esvo2_core/cfg/{mapping,tracking}/*evk4*.yaml` and `esvo2_core/launch/system/system_evk4_mapping.launch`: configuration and launch file for the rig.
 - `image_representation`: fix for an unbounded event queue (a leak that grew to 11 GB) and a crash in `AA_thread`.
 - `esvo2_core/src/core/BackendOptimization.cpp`: guards against crashes in the IMU back end.
-- `evk4_drivers/`: a patch that adds a stereo publisher to [prophesee_ros_wrapper](https://github.com/prophesee-ai/prophesee_ros_wrapper), plus the config and launch file for [sbg_ros_driver](https://github.com/SBG-Systems/sbg_ros_driver).
+- EVK4 driver: the stereo publisher, hot-pixel masks, rate cap and bias parameters are in the fork [lecrosnier/prophesee_ros_wrapper](https://github.com/lecrosnier/prophesee_ros_wrapper), branch `evk4-noise-filters`.
+- `evk4_drivers/`: the config and launch file for [sbg_ros_driver](https://github.com/SBG-Systems/sbg_ros_driver).
 
 **Quick launch** (build and set up the drivers as described in [EVK4_STEREO_SETUP.md](EVK4_STEREO_SETUP.md) first; both cameras must be on real USB3 ports, not a USB-C dock or unpowered hub):
 
