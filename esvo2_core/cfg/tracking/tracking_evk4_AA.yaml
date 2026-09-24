@@ -44,7 +44,8 @@ STILL_WINDOW: 0.5
 ACC_STILL_MAX_STD: 0.03
 # hallway2 (rotation-locked frames): moving p5 4e5, the few registered still frames 5e4-2.6e5
 STILL_MIN_INFO: 100000.0
-# fresh pixels in clustered cells: ~0.9 moving, ~0 on a still camera's noise
+# fresh pixels in clustered cells: ~0.9 moving, ~0 on a still camera's noise. Also needed
+# to leave a hold or a coast, so a chance J^T J crossing on a still camera is not published.
 STILL_MIN_SUPPORT: 0.2
 HOLD_MAX_S: 120.0
 HOLD_MAP_GRACE_S: 1.0

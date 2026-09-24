@@ -312,8 +312,14 @@ void esvo2_Tracking::TrackingLoop()
         info = rpSolver_.informationMinEig(bLockThisFrame_);
       registered = true;
     }
+    // Leaving a hold or a coast takes positive evidence from the events: a structured time
+    // surface, not only J^T J crossing its threshold, which isolated frames of a still camera
+    // do by chance (jumps of up to 0.5 m on hallway4_lateral). While tracking, a quiet surface
+    // alone does not stop it: 7-10% of moving frames have one, and they register well.
+    const bool resuming = bHolding_ || coastStartT_ >= 0.0;
     const bool observable = registered &&
-        (!bStillnessHold_ || (info >= stillMinInfo_ && (imuMotion != tools::Motion::STILL || support >= stillMinSupport_)));
+        (!bStillnessHold_ || (info >= stillMinInfo_ &&
+                              ((imuMotion != tools::Motion::STILL && !resuming) || support >= stillMinSupport_)));
 
     const char *action;
     if(observable || (registered && !canHold && !canCoast))
